@@ -1,0 +1,45 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "M808 Control",
+  "version": "1.0.0",
+  "identifier": "io.github.m808control",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "shortDescription": "Configurador do mouse Redragon M808-KS",
+    "category": "Utility",
+    "license": "MIT",
+    "publisher": "M808 Control contributors",
+    "copyright": "MIT License",
+    "longDescription": "Configurador open source para o mouse Redragon Storm Pro (M808-KS): DPI, botões, iluminação e polling rate, com ícone na bandeja.",
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": [
+          "PortugueseBR",
+          "English"
+        ],
+        "displayLanguageSelector": false
+      }
+    }
+  }
+}

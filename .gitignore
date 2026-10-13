@@ -1,0 +1,10 @@
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+
+# dados pessoais / locais
+eeprom_dump.txt
+*.m808bak
+NOTAS-mouse-redragon.md
+instaladores/

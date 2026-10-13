@@ -1,0 +1,31 @@
+[package]
+name = "m808-control"
+version = "1.0.0"
+description = "Configurador open source para o mouse Redragon M808-KS"
+license = "MIT"
+edition = "2021"
+
+[lib]
+name = "m808_control_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-autostart = "2"
+tauri-plugin-single-instance = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hidapi = { version = "2", default-features = false, features = ["windows-native", "linux-static-hidraw"] }
+thiserror = "2"
+
+# Binário pequeno: o app passa a maior parte do tempo parado na bandeja.
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

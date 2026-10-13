@@ -1,0 +1,62 @@
+name: Release
+
+# Ao publicar uma tag vX.Y.Z, compila os instaladores e cria um rascunho de release.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Testes do protocolo
+        working-directory: src-tauri
+        run: cargo test --lib
+
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+          # Linux: habilitar quando o suporte for testado (regra udev + hidraw).
+          # - platform: ubuntu-22.04
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Dependências do Linux
+        if: startsWith(matrix.platform, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libudev-dev
+
+      - run: npm ci
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "M808 Control ${{ github.ref_name }}"
+          releaseBody: "Veja o CHANGELOG.md. No Windows, o SmartScreen pode avisar que o instalador não é assinado: clique em \"Mais informações\" → \"Executar assim mesmo\"."
+          releaseDraft: true
+          prerelease: false
