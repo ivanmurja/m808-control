@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.2.0 — 2026-10-13
+
+### Novidades
+- **Tecla ou combinação num botão**: aperte a combinação no teclado (ex.: Ctrl+Shift+Esc) ou marque os
+  modificadores; até 5 teclas ao mesmo tempo
+- **Teclas de mídia num botão**: play/pause, volume, faixa anterior/próxima, mudo, calculadora,
+  navegador e outras — as mesmas do app oficial
+- As teclas fazem parte dos perfis (aplicar um perfil grava também as teclas)
+- **Linux (experimental)**: pacotes `.deb`, `.rpm` e `.AppImage`, com regra udev para acessar o mouse
+  sem root — veja `docs/LINUX.md`
+- CI testando e compilando no Windows e no Linux em todo push
+
 ## 1.1.0 — 2026-10-13
 
 ### Novidades

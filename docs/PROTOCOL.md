@@ -102,7 +102,7 @@ Mostra sempre a cor do nível de DPI ativo (`0x2C`). Efeito: `00` desligado, `01
 
 Se o mouse estiver acordando, a escrita pode ser aplicada **sem** a resposta chegar ✔ — confirmar
 relendo a EEPROM em vez de confiar só no ACK.
-| `0x100 + i·0x20` | | Combinação de teclas do botão i |
+| `0x100 + i·0x20` | bloco de 32 bytes | Tecla/combinação/mídia do slot i (botão tipo 5) ✔ — ver abaixo |
 | `0x300 + i·0x180` | | Macro i |
 
 ### DPI (sensor `0x3335`)
@@ -137,3 +137,28 @@ Slot na matriz de 16 posições por botão físico (do `Cfg.ini`): 1→0, 2→1,
 Padrões de fábrica observados após o reset: slot 7 = `02 01` (DPI ciclo), slot 8 = `04 28 03`.
 
 Evento `0x0A` com flag bit 1: `byte8 & 0x0F` = novo código de polling ✔.
+
+### Teclas, combinações e mídia (tipo 5) ✔
+
+Botão `[05, 00, 00, chk]` + bloco em `0x100 + slot·0x20`:
+
+```
+[n_eventos, evento₁ (3 bytes), …, evento_n, chk]      chk = 0x55 − soma
+```
+
+| evento | significado |
+|--------|-------------|
+| `80 bit 00` / `40 bit 00` | aperta / solta modificador — bits HID: `01` Ctrl, `02` Shift, `04` Alt, `08` Win |
+| `81 key 00` / `41 key 00` | aperta / solta tecla — código HID Keyboard (`04` = A … `1D` = Z, `28` Enter…) |
+| `82 lo hi` / `42 lo hi` | aperta / solta tecla de mídia — código HID Consumer (`00CD` play/pause, `00E9` vol+…) |
+
+Exemplos gravados e confirmados no mouse:
+
+| ação | bloco |
+|------|-------|
+| tecla A | `02 81 04 00 41 04 00 89` |
+| Ctrl+A | `04 80 01 00 81 04 00 41 04 00 40 01 00 C5` |
+| Play/Pause | `02 82 CD 00 42 CD 00 F5` |
+
+O bloco tem 32 bytes: no máximo 10 eventos (5 apertos + 5 solturas). O app oficial também usa o
+tipo `04` (tecla única, `[04, code, param]`), não necessário com o tipo 5.

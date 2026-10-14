@@ -341,3 +341,15 @@ button.danger:hover:not(:disabled) { border-color: var(--err); color: var(--err)
 .day.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 .day:disabled { opacity: 0.35; }
 .day.on:disabled { background: var(--surface-2); border-color: var(--border); color: var(--muted); }
+
+/* editor de tecla do botão */
+#button-list .row.has-editor { flex-wrap: wrap; }
+.key-editor { flex: 1 0 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding-top: 4px; }
+.key-editor select { min-width: 220px; }
+.mod { padding: 5px 10px; font-size: 12.5px; }
+.mod.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.key-capture {
+  flex: 1 1 180px; background: var(--surface-2); border: 1px dashed var(--muted); border-radius: 8px;
+  padding: 6px 10px; color: var(--text); cursor: pointer; font-weight: 600;
+}
+.key-capture:focus { border-color: var(--accent); border-style: solid; }

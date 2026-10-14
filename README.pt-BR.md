@@ -29,6 +29,7 @@ A partir da versão 1.1, o app se atualiza sozinho.
 
 - **DPI**: até 8 níveis (100–16000, passo 100), quantos entram no ciclo, nível ativo e cor de cada um
 - **Botões**: vista de cima do mouse com os 8 botões — cliques, voltar/avançar, DPI +/−/ciclo,
+  qualquer **tecla ou combinação** (Ctrl+Shift+Esc…), **teclas de mídia** (play/pause, volume…),
   troca de polling, liga/desliga luzes, reset de fábrica ou desativado
 - **Faixa RGB lateral**: onda arco-íris, **onda colorida**, respiração, fixo ou desligado, com
   velocidade e brilho de 1 a 100% — **além dos limites do app oficial**
@@ -59,15 +60,16 @@ A partir da versão 1.1, o app se atualiza sozinho.
 | Perfis por programa, horário ou bateria | — | ✅ |
 | Bateria / DPI no ícone da bandeja | — | ✅ |
 | Backup/restauração da memória do mouse | — | ✅ |
-| Código aberto, interface em inglês, Linux (planejado) | — | ✅ |
-| Macros e combinações de teclas | ✅ | 🚧 |
+| Código aberto, interface em inglês, Linux | — | ✅ |
+| Teclas, combinações e teclas de mídia nos botões | ✅ | ✅ |
+| Macros | ✅ | 🚧 |
 
 ## Plataformas
 
 | Sistema | Situação |
 |---------|----------|
 | Windows 10/11 | ✅ testado (receptor 2.4 GHz) |
-| Linux | 🚧 planejado — o código já usa hidapi/hidraw; falta regra udev e testes |
+| Linux | 🧪 experimental — `.deb`, `.rpm` e `.AppImage` nas releases; veja [docs/LINUX.md](docs/LINUX.md) |
 
 ## Compilar
 

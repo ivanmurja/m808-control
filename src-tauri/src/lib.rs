@@ -79,6 +79,8 @@ struct Inner {
     dev: Option<Device>,
     /// Última imagem lida/gravada de 0..CONFIG_LEN, base para gravar só o que mudou.
     image: Option<Vec<u8>>,
+    /// Blocos de tecla (`0x100 + slot*0x20`) já lidos/gravados, por slot.
+    key_blocks: Vec<Option<Vec<u8>>>,
     settings: Settings,
     profiles: Vec<Profile>,
     /// Perfil aplicado por último (pelo usuário ou pela troca automática).
@@ -139,13 +141,27 @@ impl Inner {
 
     fn load_config(&mut self) -> CmdResult<Config> {
         let img = self.with_device(|d| d.read_eeprom(0, CONFIG_LEN))?;
-        let cfg = Config::from_eeprom(&img);
+        let base = Config::from_eeprom(&img);
         self.image = Some(img);
-        Ok(cfg)
+        self.key_blocks = vec![None; protocol::BUTTON_SLOTS];
+        // Só os botões de tecla têm bloco útil; ler os 16 deixaria a conexão lenta.
+        let slots: Vec<usize> = base.buttons.iter().enumerate()
+            .filter(|(_, b)| b.kind == button_kind::KEY_SEQUENCE)
+            .map(|(i, _)| i)
+            .collect();
+        for slot in slots {
+            let block = self.with_device(|d| d.read_eeprom(key_block_addr(slot), protocol::KEY_BLOCK_LEN))?;
+            self.key_blocks[slot] = Some(block);
+        }
+        Ok(self.config().unwrap())
     }
 
     fn config(&self) -> Option<Config> {
-        self.image.as_deref().map(Config::from_eeprom)
+        let mut cfg = Config::from_eeprom(self.image.as_deref()?);
+        for (slot, block) in self.key_blocks.iter().enumerate() {
+            cfg.key_actions[slot] = block.as_deref().and_then(protocol::KeyAction::decode);
+        }
+        Some(cfg)
     }
 
     /// Com a sincronização ligada, a faixa recebe a cor do nível de DPI ativo.
@@ -158,6 +174,31 @@ impl Inner {
 
     /// Grava `config` sobre a imagem atual; só os bytes alterados vão para o mouse.
     fn write_config(&mut self, config: &Config) -> CmdResult<usize> {
+        // Blocos de tecla primeiro: o botão só passa a ser "tecla" quando o bloco já está certo.
+        let mut written = 0;
+        for (slot, action) in config.key_slots() {
+            let old = match self.key_blocks.get(slot).cloned().flatten() {
+                Some(b) => b,
+                None => self.with_device(|d| d.read_eeprom(key_block_addr(slot), protocol::KEY_BLOCK_LEN))?,
+            };
+            let mut new = old.clone();
+            let enc = action.encode();
+            new[..enc.len()].copy_from_slice(&enc);
+            let runs = protocol::diff_runs(&old, &new);
+            written += runs.iter().map(|(_, b)| b.len()).sum::<usize>();
+            self.with_device(|d| {
+                for (off, bytes) in &runs {
+                    d.write_eeprom(key_block_addr(slot) + off, bytes)?;
+                }
+                Ok(())
+            })?;
+            self.key_blocks[slot] = Some(new);
+        }
+        written += self.write_image(config)?;
+        Ok(written)
+    }
+
+    fn write_image(&mut self, config: &Config) -> CmdResult<usize> {
         let old = match self.image.clone() {
             Some(i) => i,
             None => self.with_device(|d| d.read_eeprom(0, CONFIG_LEN))?,
@@ -179,6 +220,10 @@ impl Inner {
     fn profile_name(&self, id: &str) -> Option<String> {
         self.profiles.iter().find(|p| p.id == id).map(|p| p.name.clone())
     }
+}
+
+fn key_block_addr(slot: usize) -> usize {
+    protocol::addr::KEY_BLOCKS + slot * protocol::KEY_BLOCK_LEN
 }
 
 fn config_path(app: &AppHandle, file: &str) -> Option<PathBuf> {
@@ -264,9 +309,13 @@ fn restore_backup(app: AppHandle, state: State<AppState>, path: String) -> CmdRe
             Ok(())
         })?;
         s.image = Some(img[..CONFIG_LEN].to_vec());
+        s.key_blocks = (0..protocol::BUTTON_SLOTS)
+            .map(|slot| Some(img[key_block_addr(slot)..][..protocol::KEY_BLOCK_LEN].to_vec()))
+            .collect();
     }
     refresh_tray(&app);
-    Ok(Config::from_eeprom(img))
+    let cfg = state.0.lock().unwrap().config().expect("imagem restaurada");
+    Ok(cfg)
 }
 
 fn load_settings(app: &AppHandle) -> Settings {
@@ -836,6 +885,7 @@ pub fn run() {
             api,
             dev: None,
             image: None,
+            key_blocks: vec![None; protocol::BUTTON_SLOTS],
             settings: Settings::default(),
             profiles: Vec::new(),
             active_profile: None,

@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { ask, open, save } from "@tauri-apps/plugin-dialog";
 import { applyStatic, setLang, t, type I18nKey, type LangSetting } from "./i18n";
+import { HID_BY_CODE, MEDIA_KEYS, MODIFIERS, MODIFIER_CODES, keyName } from "./keys";
 import { PHYSICAL_BUTTONS, mouseSvg, type StripLook } from "./mouse";
 
 // ---- Tipos espelhando src-tauri/src (protocol.rs, profiles.rs, lib.rs) ----
@@ -12,6 +13,7 @@ interface LedEffect { mode: number; speed: number; brightness: number }
 interface LogoLed extends LedEffect { color: RGB }
 interface StripLed { mode: number; color: RGB; speed: number; brightness: number }
 interface Button { kind: number; code: number; param: number }
+type KeyAction = { type: "keys"; modifiers: number; keys: number[] } | { type: "media"; usage: number };
 interface Config {
   polling_hz: number;
   level_count: number;
@@ -21,6 +23,7 @@ interface Config {
   logo_led: LogoLed;
   strip: StripLed;
   buttons: Button[];
+  key_actions: (KeyAction | null)[];
 }
 interface Settings {
   sync_strip_to_dpi: boolean;
@@ -43,9 +46,11 @@ interface DeviceEvent { dpi_level: number | null; polling_hz: number | null }
 // ---- Tabelas de domínio ----
 const DPI_MIN = 100, DPI_MAX = 16000, DPI_STEP = 100;
 
+const KIND_KEYS = 5;
 const KIND_FACTORY_RESET = 9;
 
-const FUNCTIONS: { label: I18nKey; b: Button }[] = [
+/** `action` marca as entradas do tipo tecla (o mesmo `kind` 5, distinguidas pela ação). */
+const FUNCTIONS: { label: I18nKey; b: Button; action?: KeyAction["type"] }[] = [
   { label: "fn.leftClick", b: { kind: 1, code: 0x01, param: 0 } },
   { label: "fn.rightClick", b: { kind: 1, code: 0x02, param: 0 } },
   { label: "fn.middleClick", b: { kind: 1, code: 0x04, param: 0 } },
@@ -56,6 +61,8 @@ const FUNCTIONS: { label: I18nKey; b: Button }[] = [
   { label: "fn.dpiCycle", b: { kind: 2, code: 0x01, param: 0 } },
   { label: "fn.polling", b: { kind: 7, code: 0, param: 0 } },
   { label: "fn.lights", b: { kind: 8, code: 0, param: 0 } },
+  { label: "fn.keys", b: { kind: KIND_KEYS, code: 0, param: 0 }, action: "keys" },
+  { label: "fn.media", b: { kind: KIND_KEYS, code: 0, param: 0 }, action: "media" },
   { label: "fn.reset", b: { kind: KIND_FACTORY_RESET, code: 0, param: 0 } },
   { label: "fn.disabled", b: { kind: 0, code: 0, param: 0 } },
 ];
@@ -197,9 +204,81 @@ function selectButton(n: number, focusSelect = false) {
   if (focusSelect) row?.querySelector("select")?.focus();
 }
 
-function functionLabel(b: Button): string {
-  const f = FUNCTIONS.find((f) => sameButton(f.b, b));
-  return f ? t(f.label) : t("buttons.unknown", { kind: b.kind, code: hex2(b.code) });
+function actionLabel(a: KeyAction | null | undefined): string {
+  if (!a) return t("keys.none");
+  if (a.type === "media") {
+    const m = MEDIA_KEYS.find((k) => k.usage === a.usage);
+    return m ? t(m.label) : `0x${a.usage.toString(16)}`;
+  }
+  const parts = MODIFIERS.filter((m) => a.modifiers & m.bit).map((m) => m.label);
+  parts.push(...a.keys.map(keyName));
+  return parts.length ? parts.join(" + ") : t("keys.none");
+}
+
+/** Índice em FUNCTIONS que corresponde ao que está gravado no slot. */
+function functionIndex(c: Config, slot: number): number {
+  const b = c.buttons[slot];
+  if (b.kind === KIND_KEYS) return FUNCTIONS.findIndex((f) => f.action === (c.key_actions[slot]?.type ?? "keys"));
+  return FUNCTIONS.findIndex((f) => !f.action && sameButton(f.b, b));
+}
+
+function functionLabel(c: Config, slot: number): string {
+  const b = c.buttons[slot];
+  if (b.kind === KIND_KEYS) return actionLabel(c.key_actions[slot]);
+  const i = functionIndex(c, slot);
+  return i >= 0 ? t(FUNCTIONS[i].label) : t("buttons.unknown", { kind: b.kind, code: hex2(b.code) });
+}
+
+/** Ação de tecla incompleta (nada para enviar). */
+const emptyAction = (a: KeyAction | null | undefined) => !a || (a.type === "keys" && !a.keys.length && !a.modifiers);
+
+function keyEditor(slot: number): HTMLElement | null {
+  const c = draft!;
+  if (c.buttons[slot].kind !== KIND_KEYS) return null;
+  const action = c.key_actions[slot];
+
+  if (action?.type === "media") {
+    const sel = el("select");
+    MEDIA_KEYS.forEach((m) => sel.append(el("option", { value: String(m.usage), textContent: t(m.label), selected: m.usage === action.usage })));
+    sel.onchange = () => update((d) => (d.key_actions[slot] = { type: "media", usage: Number(sel.value) }), true);
+    return el("div", { className: "key-editor" }, sel);
+  }
+
+  const cur = action?.type === "keys" ? action : { type: "keys" as const, modifiers: 0, keys: [] };
+  const setKeys = (modifiers: number, keys: number[]) =>
+    update((d) => (d.key_actions[slot] = { type: "keys", modifiers, keys }), true);
+
+  const mods = MODIFIERS.map((m) => {
+    const b = el("button", { className: `mod ${cur.modifiers & m.bit ? "on" : ""}`, textContent: m.label });
+    b.onclick = (e) => { e.stopPropagation(); setKeys(cur.modifiers ^ m.bit, cur.keys); };
+    return b;
+  });
+
+  // Captura: aperta a combinação no teclado. Só modificadores (ex.: Shift sozinho) também vale.
+  const capture = el("input", { type: "text", readOnly: true, className: "key-capture",
+    value: emptyAction(cur) ? "" : actionLabel(cur), placeholder: t("keys.capture") });
+  let held = 0;
+  let gotKey = false;
+  capture.onfocus = () => { held = 0; gotKey = false; capture.placeholder = t("keys.press"); };
+  capture.onblur = () => { capture.placeholder = t("keys.capture"); };
+  capture.onkeydown = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const mod = MODIFIER_CODES[e.code];
+    if (mod) { held |= mod; return; }
+    const hid = HID_BY_CODE[e.code];
+    if (hid == null) return;
+    gotKey = true;
+    const modifiers = (e.ctrlKey ? 1 : 0) | (e.shiftKey ? 2 : 0) | (e.altKey ? 4 : 0) | (e.metaKey ? 8 : 0);
+    setKeys(modifiers, [hid]);
+  };
+  capture.onkeyup = (e) => {
+    if (MODIFIER_CODES[e.code] && !gotKey && held) { setKeys(held, []); held = 0; }
+  };
+  const clear = el("button", { className: "ghost small", textContent: t("keys.clear") });
+  clear.onclick = (e) => { e.stopPropagation(); setKeys(0, []); };
+
+  return el("div", { className: "key-editor" }, ...mods, capture, clear);
 }
 
 function stripLook(c: Config): StripLook {
@@ -215,7 +294,7 @@ function renderButtons(c: Config) {
     const n = Number(g.dataset.n);
     const b = PHYSICAL_BUTTONS.find((p) => p.n === n)!;
     const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
-    title.textContent = `${t(b.name)}: ${functionLabel(c.buttons[b.slot])}`;
+    title.textContent = `${t(b.name)}: ${functionLabel(c, b.slot)}`;
     g.prepend(title);
     g.setAttribute("aria-label", `${n} ${t(b.name)}`);
     g.onclick = () => selectButton(n, true);
@@ -229,13 +308,9 @@ function renderButtons(c: Config) {
   list.replaceChildren(...PHYSICAL_BUTTONS.map(({ n, name, slot }) => {
     const cur = c.buttons[slot];
     const sel = el("select");
-    let known = false;
-    FUNCTIONS.forEach((f, i) => {
-      const match = sameButton(f.b, cur);
-      known ||= match;
-      sel.append(el("option", { value: String(i), textContent: t(f.label), selected: match }));
-    });
-    if (!known) {
+    const selected = functionIndex(c, slot);
+    FUNCTIONS.forEach((f, i) => sel.append(el("option", { value: String(i), textContent: t(f.label), selected: i === selected })));
+    if (selected < 0) {
       sel.prepend(el("option", { value: "keep", selected: true, textContent: t("buttons.current", { kind: cur.kind, code: hex2(cur.code) }) }));
     }
     sel.onchange = async () => {
@@ -245,12 +320,19 @@ function renderButtons(c: Config) {
         const ok = await ask(t("reset.body"), { title: t("reset.title"), kind: "warning", okLabel: t("reset.ok"), cancelLabel: t("common.cancel") });
         if (!ok) { renderButtons(draft!); return; }
       }
-      update((d) => (d.buttons[slot] = { ...f.b }), true);
+      update((d) => {
+        d.buttons[slot] = { ...f.b };
+        if (f.action === "media") d.key_actions[slot] = { type: "media", usage: MEDIA_KEYS[0].usage };
+        else if (f.action === "keys" && d.key_actions[slot]?.type !== "keys") d.key_actions[slot] = { type: "keys", modifiers: 0, keys: [] };
+      }, true);
       selectButton(n);
+      if (f.action === "keys") document.querySelector<HTMLInputElement>(`#button-list .row[data-n="${n}"] .key-capture`)?.focus();
     };
     sel.onfocus = () => selectButton(n);
-    const row = el("div", { className: "row" },
-      el("span", { className: "label" }, el("span", { className: "num", textContent: String(n) }), t(name)), sel);
+    const editor = keyEditor(slot);
+    const row = el("div", { className: `row ${editor ? "has-editor" : ""}` },
+      el("span", { className: "label" }, el("span", { className: "num", textContent: String(n) }), t(name)), sel,
+      ...(editor ? [editor] : []));
     row.dataset.n = String(n);
     row.onclick = () => selectButton(n);
     return row;
@@ -630,6 +712,11 @@ async function apply() {
   if (!draft) return;
   if (!draft.buttons.some((b) => b.kind === 1 && b.code === 0x01)) {
     toast(t("apply.needLeft"), "err");
+    return;
+  }
+  const missing = PHYSICAL_BUTTONS.find(({ slot }) => draft!.buttons[slot].kind === KIND_KEYS && emptyAction(draft!.key_actions[slot]));
+  if (missing) {
+    toast(t("keys.missing", { button: t(missing.name) }), "err");
     return;
   }
   await guarded("err.apply", async () => {

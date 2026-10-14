@@ -28,6 +28,7 @@ From version 1.1 on, the app updates itself.
 
 - **DPI**: up to 8 levels (100–16000, step 100), how many are in the cycle, active level and color of each
 - **Buttons**: top view of the mouse with its 8 buttons — clicks, back/forward, DPI +/−/cycle,
+  any **key or key combination** (Ctrl+Shift+Esc…), **media keys** (play/pause, volume…),
   polling switch, lights on/off, factory reset or disabled
 - **Side RGB strip**: rainbow wave, **color wave**, breathing, steady or off, with speed and
   brightness from 1 to 100% — **beyond the official app limits**
@@ -58,15 +59,16 @@ From version 1.1 on, the app updates itself.
 | Profiles by program, schedule or battery | — | ✅ |
 | Battery / DPI in the tray icon | — | ✅ |
 | Mouse memory backup/restore | — | ✅ |
-| Open source, English UI, Linux (planned) | — | ✅ |
-| Macros and key combinations | ✅ | 🚧 |
+| Open source, English UI, Linux | — | ✅ |
+| Keys, key combinations and media keys on buttons | ✅ | ✅ |
+| Macros | ✅ | 🚧 |
 
 ## Platforms
 
 | OS | Status |
 |----|--------|
 | Windows 10/11 | ✅ tested (2.4 GHz receiver) |
-| Linux | 🚧 planned — the code already uses hidapi/hidraw; needs a udev rule and testing |
+| Linux | 🧪 experimental — `.deb`, `.rpm` and `.AppImage` in the releases; see [docs/LINUX.md](docs/LINUX.md) |
 
 ## Building
 

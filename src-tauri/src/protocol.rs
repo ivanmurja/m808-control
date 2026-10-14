@@ -46,7 +46,12 @@ pub mod addr {
     pub const LOGO_LED: usize = 0x54;
     pub const BUTTONS: usize = 0x60;
     pub const STRIP: usize = 0xA0;
+    /// Bloco de tecla/combinação/mídia do slot `i`: `KEY_BLOCKS + i * KEY_BLOCK_LEN`.
+    pub const KEY_BLOCKS: usize = 0x100;
 }
+
+/// Tamanho de cada bloco de tecla (eventos + checksum).
+pub const KEY_BLOCK_LEN: usize = 0x20;
 
 pub const MAX_LEVELS: usize = 8;
 pub const BUTTON_SLOTS: usize = 16;
@@ -71,6 +76,8 @@ pub mod button_kind {
     pub const DPI: u8 = 2;
     pub const POLLING_SWITCH: u8 = 7;
     pub const LIGHTS_TOGGLE: u8 = 8;
+    /// Tecla, combinação ou tecla de mídia; os eventos ficam no bloco do slot em `0x100+`.
+    pub const KEY_SEQUENCE: u8 = 5;
     /// Restaura a configuração de fábrica do mouse ao ser pressionado.
     pub const FACTORY_RESET: u8 = 9;
 }
@@ -272,6 +279,14 @@ pub struct Config {
     pub logo_led: LogoLed,
     pub strip: StripLed,
     pub buttons: Vec<Button>,
+    /// Ação de cada slot cujo botão é [`button_kind::KEY_SEQUENCE`] (fica fora da imagem 0..CONFIG_LEN,
+    /// nos blocos de `addr::KEY_BLOCKS`). Perfis antigos sem este campo carregam vazio.
+    #[serde(default = "no_key_actions")]
+    pub key_actions: Vec<Option<KeyAction>>,
+}
+
+pub fn no_key_actions() -> Vec<Option<KeyAction>> {
+    vec![None; BUTTON_SLOTS]
 }
 
 impl Config {
@@ -322,6 +337,7 @@ impl Config {
                 brightness: img[s + 5],
             },
             buttons,
+            key_actions: no_key_actions(),
         }
     }
 
@@ -366,6 +382,13 @@ impl Config {
         }
     }
 
+    /// Slots cujo botão envia tecla/mídia e cuja ação está definida.
+    pub fn key_slots(&self) -> impl Iterator<Item = (usize, &KeyAction)> {
+        self.buttons.iter().enumerate().filter(|(_, b)| b.kind == button_kind::KEY_SEQUENCE).filter_map(|(i, _)| {
+            self.key_actions.get(i).and_then(|a| a.as_ref()).map(|a| (i, a))
+        })
+    }
+
     /// Cor do nível de DPI ativo.
     pub fn active_color(&self) -> [u8; 3] {
         self.levels.get(self.active_level as usize).map_or([0; 3], |l| l.color)
@@ -391,6 +414,81 @@ pub fn diff_runs(old: &[u8], new: &[u8]) -> Vec<(usize, Vec<u8>)> {
         i = end;
     }
     runs
+}
+
+/// O que um botão do tipo [`button_kind::KEY_SEQUENCE`] envia.
+///
+/// Gravado como `[n_eventos, eventos de 3 bytes..., chk]` (validado no hardware):
+/// `80 bit 00`/`40 bit 00` modificador aperta/solta, `81 tecla 00`/`41 tecla 00` tecla HID,
+/// `82 lo hi`/`42 lo hi` tecla de mídia (HID Consumer).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum KeyAction {
+    /// Modificadores (bits HID: 1 Ctrl, 2 Shift, 4 Alt, 8 Win) + até 3 teclas (códigos HID).
+    Keys { modifiers: u8, keys: Vec<u8> },
+    /// Tecla de mídia (código HID Consumer, ex.: 0xCD = play/pause).
+    Media { usage: u16 },
+}
+
+const EV_DOWN: u8 = 0x80;
+const EV_UP: u8 = 0x40;
+const EV_MODIFIER: u8 = 0x00;
+const EV_KEY: u8 = 0x01;
+const EV_CONSUMER: u8 = 0x02;
+const MAX_KEYS: usize = 3;
+/// Teclas apertadas ao mesmo tempo (modificadores + teclas): 5 apertos + 5 solturas cabem no bloco.
+const MAX_PRESSED: usize = (KEY_BLOCK_LEN - 2) / 3 / 2;
+
+impl KeyAction {
+    /// Bloco pronto para gravar (≤ `KEY_BLOCK_LEN` bytes, com checksum).
+    pub fn encode(&self) -> Vec<u8> {
+        let mut ev: Vec<[u8; 3]> = Vec::new();
+        match self {
+            KeyAction::Keys { modifiers, keys } => {
+                let mods: Vec<u8> = (0..4).map(|b| 1u8 << b).filter(|bit| modifiers & bit != 0).collect();
+                let room = MAX_KEYS.min(MAX_PRESSED - mods.len());
+                let keys: Vec<u8> = keys.iter().copied().filter(|k| *k != 0).take(room).collect();
+                // aperta modificadores, aperta teclas; solta na ordem inversa
+                ev.extend(mods.iter().map(|&m| [EV_DOWN | EV_MODIFIER, m, 0]));
+                ev.extend(keys.iter().map(|&k| [EV_DOWN | EV_KEY, k, 0]));
+                ev.extend(keys.iter().rev().map(|&k| [EV_UP | EV_KEY, k, 0]));
+                ev.extend(mods.iter().rev().map(|&m| [EV_UP | EV_MODIFIER, m, 0]));
+            }
+            KeyAction::Media { usage } => {
+                let [lo, hi] = usage.to_le_bytes();
+                ev.push([EV_DOWN | EV_CONSUMER, lo, hi]);
+                ev.push([EV_UP | EV_CONSUMER, lo, hi]);
+            }
+        }
+        let mut out = vec![ev.len() as u8];
+        out.extend(ev.iter().flatten());
+        out.push(checksum(&out));
+        debug_assert!(out.len() <= KEY_BLOCK_LEN);
+        out
+    }
+
+    /// Lê um bloco gravado; `None` se estiver vazio, corrompido ou num formato desconhecido.
+    pub fn decode(block: &[u8]) -> Option<KeyAction> {
+        let n = *block.first()? as usize;
+        let len = 1 + n * 3;
+        if n == 0 || len + 1 > block.len().min(KEY_BLOCK_LEN) || checksum(&block[..len]) != block[len] {
+            return None;
+        }
+        let events: Vec<&[u8]> = block[1..len].chunks(3).collect();
+        if events.iter().all(|e| e[0] & 0x0F == EV_CONSUMER) {
+            return Some(KeyAction::Media { usage: u16::from_le_bytes([events[0][1], events[0][2]]) });
+        }
+        let mut modifiers = 0;
+        let mut keys = Vec::new();
+        for e in events.iter().filter(|e| e[0] & 0xC0 == EV_DOWN) {
+            match e[0] & 0x0F {
+                EV_MODIFIER => modifiers |= e[1],
+                EV_KEY => keys.push(e[1]),
+                _ => return None,
+            }
+        }
+        Some(KeyAction::Keys { modifiers, keys })
+    }
 }
 
 /// Evento espontâneo do mouse (input report com byte1 = 0x0A).
@@ -508,6 +606,47 @@ mod tests {
         c.apply_to(&mut img);
         assert_eq!(&img[0xA0..0xA7], &[0x00, 0x00, 0x40, 0xFF, 0x0F, 0xFF, 0x08]);
         assert_eq!(&img[0xA7..0xAB], &[0x00, 0x55, 0x01, 0x54], "bytes desconhecidos preservados");
+    }
+
+    #[test]
+    fn key_blocks_match_hardware_tests() {
+        // Bytes gravados no mouse e confirmados na prática:
+        let a = KeyAction::Keys { modifiers: 0, keys: vec![0x04] };
+        assert_eq!(a.encode(), [0x02, 0x81, 0x04, 0x00, 0x41, 0x04, 0x00, 0x89]); // digita "a"
+        let ctrl_a = KeyAction::Keys { modifiers: 0x01, keys: vec![0x04] };
+        assert_eq!(
+            ctrl_a.encode(),
+            [0x04, 0x80, 0x01, 0x00, 0x81, 0x04, 0x00, 0x41, 0x04, 0x00, 0x40, 0x01, 0x00, 0xC5]
+        );
+        let play = KeyAction::Media { usage: 0x00CD };
+        assert_eq!(play.encode(), [0x02, 0x82, 0xCD, 0x00, 0x42, 0xCD, 0x00, 0xF5]); // play/pause
+        for k in [a, ctrl_a, play] {
+            let mut block = k.encode();
+            block.resize(KEY_BLOCK_LEN, 0xFF);
+            assert_eq!(KeyAction::decode(&block), Some(k));
+        }
+    }
+
+    #[test]
+    fn biggest_combo_fits_and_roundtrips() {
+        // 2 modificadores + 3 teclas = 5 apertos: o máximo que cabe
+        let k = KeyAction::Keys { modifiers: 0x03, keys: vec![0x04, 0x05, 0x06, 0x07] };
+        let block = k.encode();
+        assert!(block.len() <= KEY_BLOCK_LEN);
+        assert_eq!(KeyAction::decode(&block), Some(KeyAction::Keys { modifiers: 0x03, keys: vec![0x04, 0x05, 0x06] }));
+        // 4 modificadores: sobra lugar para 1 tecla
+        let k = KeyAction::Keys { modifiers: 0x0F, keys: vec![0x04, 0x05] };
+        assert!(k.encode().len() <= KEY_BLOCK_LEN);
+        assert_eq!(KeyAction::decode(&k.encode()), Some(KeyAction::Keys { modifiers: 0x0F, keys: vec![0x04] }));
+    }
+
+    #[test]
+    fn empty_or_corrupt_blocks_decode_to_none() {
+        assert_eq!(KeyAction::decode(&[0xFF; KEY_BLOCK_LEN]), None);
+        assert_eq!(KeyAction::decode(&[0x00; KEY_BLOCK_LEN]), None);
+        let mut b = KeyAction::Media { usage: 0xE9 }.encode();
+        b[2] ^= 1;
+        assert_eq!(KeyAction::decode(&b), None);
     }
 
     #[test]
