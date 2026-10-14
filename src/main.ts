@@ -1,9 +1,11 @@
+import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { ask, open, save } from "@tauri-apps/plugin-dialog";
+import { applyStatic, setLang, t, type I18nKey, type LangSetting } from "./i18n";
 import { PHYSICAL_BUTTONS, mouseSvg, type StripLook } from "./mouse";
 
-// ---- Tipos espelhando src-tauri/src/protocol.rs ----
+// ---- Tipos espelhando src-tauri/src (protocol.rs, profiles.rs, lib.rs) ----
 type RGB = [number, number, number];
 interface DpiLevel { dpi: number; color: RGB }
 interface LedEffect { mode: number; speed: number; brightness: number }
@@ -26,9 +28,15 @@ interface Settings {
   auto_switch: boolean;
   default_profile: string | null;
   tray_icon: "logo" | "dpi" | "battery";
+  language: LangSetting;
+  low_battery_profile: string | null;
+  low_battery_threshold: number;
 }
-interface Profile { id: string; name: string; config: Config; apps: string[] }
+/** Dias: 0 = domingo … 6 = sábado. Horários "HH:MM"; se fim < início, cruza a meia-noite. */
+interface Schedule { start: string; end: string; days: number[] }
+interface Profile { id: string; name: string; config: Config; apps: string[]; schedule: Schedule | null }
 interface ProfilesView { profiles: Profile[]; active: string | null }
+interface UpdateInfo { version: string; current: string; notes: string | null }
 interface DeviceInfo { pid: number; wireless: boolean }
 interface DeviceEvent { dpi_level: number | null; polling_hz: number | null }
 
@@ -37,48 +45,55 @@ const DPI_MIN = 100, DPI_MAX = 16000, DPI_STEP = 100;
 
 const KIND_FACTORY_RESET = 9;
 
-const FUNCTIONS: { label: string; b: Button }[] = [
-  { label: "Clique esquerdo", b: { kind: 1, code: 0x01, param: 0 } },
-  { label: "Clique direito", b: { kind: 1, code: 0x02, param: 0 } },
-  { label: "Clique do meio", b: { kind: 1, code: 0x04, param: 0 } },
-  { label: "Voltar", b: { kind: 1, code: 0x08, param: 0 } },
-  { label: "Avançar", b: { kind: 1, code: 0x10, param: 0 } },
-  { label: "DPI +", b: { kind: 2, code: 0x02, param: 0 } },
-  { label: "DPI −", b: { kind: 2, code: 0x03, param: 0 } },
-  { label: "DPI em ciclo", b: { kind: 2, code: 0x01, param: 0 } },
-  { label: "Trocar polling rate", b: { kind: 7, code: 0, param: 0 } },
-  { label: "Ligar/desligar luzes", b: { kind: 8, code: 0, param: 0 } },
-  { label: "⚠ Reset de fábrica", b: { kind: KIND_FACTORY_RESET, code: 0, param: 0 } },
-  { label: "Desativado", b: { kind: 0, code: 0, param: 0 } },
+const FUNCTIONS: { label: I18nKey; b: Button }[] = [
+  { label: "fn.leftClick", b: { kind: 1, code: 0x01, param: 0 } },
+  { label: "fn.rightClick", b: { kind: 1, code: 0x02, param: 0 } },
+  { label: "fn.middleClick", b: { kind: 1, code: 0x04, param: 0 } },
+  { label: "fn.back", b: { kind: 1, code: 0x08, param: 0 } },
+  { label: "fn.forward", b: { kind: 1, code: 0x10, param: 0 } },
+  { label: "fn.dpiUp", b: { kind: 2, code: 0x02, param: 0 } },
+  { label: "fn.dpiDown", b: { kind: 2, code: 0x03, param: 0 } },
+  { label: "fn.dpiCycle", b: { kind: 2, code: 0x01, param: 0 } },
+  { label: "fn.polling", b: { kind: 7, code: 0, param: 0 } },
+  { label: "fn.lights", b: { kind: 8, code: 0, param: 0 } },
+  { label: "fn.reset", b: { kind: KIND_FACTORY_RESET, code: 0, param: 0 } },
+  { label: "fn.disabled", b: { kind: 0, code: 0, param: 0 } },
 ];
 
 /** Modos da faixa lateral (byte 0 de 0xA0), na ordem do menu. */
-const STRIP_MODES = [
-  { mode: 0, label: "Onda arco-íris", color: false, speed: true },
-  { mode: 3, label: "Onda colorida", color: true, speed: true },
-  { mode: 1, label: "Respiração", color: true, speed: true },
-  { mode: 2, label: "Fixo", color: true, speed: false },
-  { mode: 4, label: "Desligado", color: false, speed: false },
+const STRIP_MODES: { mode: number; label: I18nKey; color: boolean; speed: boolean }[] = [
+  { mode: 0, label: "strip.rainbow", color: false, speed: true },
+  { mode: 3, label: "strip.colorWave", color: true, speed: true },
+  { mode: 1, label: "strip.breath", color: true, speed: true },
+  { mode: 2, label: "strip.steady", color: true, speed: false },
+  { mode: 4, label: "strip.off", color: false, speed: false },
 ];
 
 /** Luz da roda (0x4C): sempre na cor do nível de DPI ativo. */
-const WHEEL_MODES = [
-  { mode: 1, label: "Fixa" },
-  { mode: 2, label: "Respiração" },
-  { mode: 0, label: "Desligada" },
+const WHEEL_MODES: { mode: number; label: I18nKey }[] = [
+  { mode: 1, label: "wheel.steady" },
+  { mode: 2, label: "wheel.breath" },
+  { mode: 0, label: "wheel.off" },
 ];
 
 // ---- Estado ----
 let saved: Config | null = null; // o que está no mouse
 let draft: Config | null = null; // o que está na tela
-let settings: Settings = { sync_strip_to_dpi: false, show_osd: true, auto_switch: false, default_profile: null, tray_icon: "dpi" };
+let settings: Settings = {
+  sync_strip_to_dpi: false, show_osd: true, auto_switch: false, default_profile: null, tray_icon: "dpi",
+  language: "auto", low_battery_profile: null, low_battery_threshold: 20,
+};
 let profiles: Profile[] = [];
 let activeProfile: string | null = null;
+let deviceInfo: DeviceInfo | null = null;
+let batteryLevel: number | null = null;
+let pendingUpdate: UpdateInfo | null = null;
 let busy = false;
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string) => document.querySelector<T>(sel)!;
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v));
 const sameButton = (a: Button, b: Button) => a.kind === b.kind && a.code === b.code && a.param === b.param;
+const hex2 = (n: number) => `0x${n.toString(16)}`;
 
 const toHex = (c: RGB) => "#" + c.map((v) => v.toString(16).padStart(2, "0")).join("");
 const fromHex = (h: string): RGB => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16)) as RGB;
@@ -95,16 +110,22 @@ function el<K extends keyof HTMLElementTagNameMap>(
 
 let toastTimer: number | undefined;
 function toast(msg: string, kind: "ok" | "err" = "ok") {
-  const t = $("#toast");
-  t.textContent = msg;
-  t.className = `toast show ${kind}`;
+  const box = $("#toast");
+  box.textContent = msg;
+  box.className = `toast show ${kind}`;
   clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => (t.className = "toast"), 3500);
+  toastTimer = window.setTimeout(() => (box.className = "toast"), 3500);
 }
 
-function setStatus(state: "ok" | "wait" | "err", text: string) {
-  $("#status-dot").className = `dot ${state}`;
-  $("#status-text").textContent = text;
+type StatusState = "ok" | "wait" | "err";
+let status: { state: StatusState; key: I18nKey; extra?: string } = { state: "wait", key: "status.searching" };
+function setStatus(state: StatusState, key: I18nKey, extra?: string) {
+  status = { state, key, extra };
+  renderStatus();
+}
+function renderStatus() {
+  $("#status-dot").className = `dot ${status.state}`;
+  $("#status-text").textContent = status.extra ?? t(status.key);
 }
 
 /** Aplica regras derivadas (ex.: faixa sincronizada com a cor do DPI). */
@@ -112,9 +133,11 @@ function normalize(c: Config | null) {
   if (c && settings.sync_strip_to_dpi) c.strip.color = activeColor(c);
 }
 
+const isDirty = () => !!saved && !!draft && JSON.stringify(saved) !== JSON.stringify(draft);
+
 function markDirty() {
-  const dirty = !!saved && !!draft && JSON.stringify(saved) !== JSON.stringify(draft);
-  $("#dirty-text").textContent = dirty ? "Alterações não aplicadas" : "Sem alterações";
+  const dirty = isDirty();
+  $("#dirty-text").textContent = t(dirty ? "apply.dirty" : "apply.clean");
   $("#applybar").classList.toggle("dirty", dirty);
   $<HTMLButtonElement>("#btn-apply").disabled = !dirty || busy;
   $<HTMLButtonElement>("#btn-discard").disabled = !dirty || busy;
@@ -141,10 +164,10 @@ function renderDpi(c: Config) {
   const list = $("#dpi-levels");
   list.replaceChildren(...c.levels.map((lvl, i) => {
     const enabled = i < c.level_count;
-    const radio = el("input", { type: "radio", name: "active", checked: i === c.active_level, disabled: !enabled, title: "Nível ativo" });
+    const radio = el("input", { type: "radio", name: "active", checked: i === c.active_level, disabled: !enabled, title: t("dpi.active") });
     radio.onchange = () => update((d) => (d.active_level = i), true);
 
-    const color = el("input", { type: "color", value: toHex(lvl.color), title: "Cor do nível (luz da roda)" });
+    const color = el("input", { type: "color", value: toHex(lvl.color), title: t("dpi.color") });
     color.oninput = () => update((d) => (d.levels[i].color = fromHex(color.value)));
 
     const slider = el("input", { type: "range", min: String(DPI_MIN), max: String(DPI_MAX), step: String(DPI_STEP), value: String(lvl.dpi) });
@@ -175,7 +198,8 @@ function selectButton(n: number, focusSelect = false) {
 }
 
 function functionLabel(b: Button): string {
-  return FUNCTIONS.find((f) => sameButton(f.b, b))?.label ?? `Tipo ${b.kind} · 0x${b.code.toString(16)}`;
+  const f = FUNCTIONS.find((f) => sameButton(f.b, b));
+  return f ? t(f.label) : t("buttons.unknown", { kind: b.kind, code: hex2(b.code) });
 }
 
 function stripLook(c: Config): StripLook {
@@ -191,8 +215,9 @@ function renderButtons(c: Config) {
     const n = Number(g.dataset.n);
     const b = PHYSICAL_BUTTONS.find((p) => p.n === n)!;
     const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
-    title.textContent = `${b.name}: ${functionLabel(c.buttons[b.slot])}`;
+    title.textContent = `${t(b.name)}: ${functionLabel(c.buttons[b.slot])}`;
     g.prepend(title);
+    g.setAttribute("aria-label", `${n} ${t(b.name)}`);
     g.onclick = () => selectButton(n, true);
     g.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); selectButton(n, true); } };
     g.onmouseenter = () => document.querySelector(`#button-list .row[data-n="${n}"]`)?.classList.add("hover");
@@ -208,22 +233,16 @@ function renderButtons(c: Config) {
     FUNCTIONS.forEach((f, i) => {
       const match = sameButton(f.b, cur);
       known ||= match;
-      sel.append(el("option", { value: String(i), textContent: f.label, selected: match }));
+      sel.append(el("option", { value: String(i), textContent: t(f.label), selected: match }));
     });
     if (!known) {
-      sel.prepend(el("option", {
-        value: "keep", selected: true,
-        textContent: `Função atual (tipo ${cur.kind}, código 0x${cur.code.toString(16)})`,
-      }));
+      sel.prepend(el("option", { value: "keep", selected: true, textContent: t("buttons.current", { kind: cur.kind, code: hex2(cur.code) }) }));
     }
     sel.onchange = async () => {
       if (sel.value === "keep") return;
       const f = FUNCTIONS[Number(sel.value)];
       if (f.b.kind === KIND_FACTORY_RESET) {
-        const ok = await ask(
-          "Ao ser pressionado, este botão apaga TODA a configuração do mouse (DPIs, cores, botões, polling) e volta ao padrão de fábrica.\n\nAntes de gravar, o app salva um backup automático. Continuar?",
-          { title: "Reset de fábrica", kind: "warning", okLabel: "Usar mesmo assim", cancelLabel: "Cancelar" },
-        );
+        const ok = await ask(t("reset.body"), { title: t("reset.title"), kind: "warning", okLabel: t("reset.ok"), cancelLabel: t("common.cancel") });
         if (!ok) { renderButtons(draft!); return; }
       }
       update((d) => (d.buttons[slot] = { ...f.b }), true);
@@ -231,7 +250,7 @@ function renderButtons(c: Config) {
     };
     sel.onfocus = () => selectButton(n);
     const row = el("div", { className: "row" },
-      el("span", { className: "label" }, el("span", { className: "num", textContent: String(n) }), name), sel);
+      el("span", { className: "label" }, el("span", { className: "num", textContent: String(n) }), t(name)), sel);
     row.dataset.n = String(n);
     row.onclick = () => selectButton(n);
     return row;
@@ -259,16 +278,10 @@ const pctToSpeed = (pct: number, mode: number) => {
 const brightToPct = (raw: number) => Math.max(1, Math.round((raw * 100) / 255));
 const pctToBright = (pct: number) => Math.max(1, Math.round((pct * 255) / 100));
 
-function pctSlider(value: number, onChange: (v: number) => void, disabled = false): HTMLElement {
-  const input = el("input", { type: "range", min: "1", max: "100", step: "1", value: String(value), disabled });
-  const label = el("span", { className: "mono pct", textContent: `${value}%` });
-  input.oninput = () => { label.textContent = `${input.value}%`; onChange(Number(input.value)); };
-  return el("div", { className: "inline" }, input, label);
-}
-function levelSlider(value: number, onChange: (v: number) => void, disabled = false): HTMLElement {
-  const input = el("input", { type: "range", min: "1", max: "10", step: "1", value: String(value), disabled });
-  const label = el("span", { className: "mono", textContent: String(value) });
-  input.oninput = () => { label.textContent = input.value; onChange(Number(input.value)); };
+function rangeSlider(max: number, value: number, suffix: string, onChange: (v: number) => void, disabled = false): HTMLElement {
+  const input = el("input", { type: "range", min: "1", max: String(max), step: "1", value: String(value), disabled });
+  const label = el("span", { className: "mono pct", textContent: `${value}${suffix}` });
+  input.oninput = () => { label.textContent = `${input.value}${suffix}`; onChange(Number(input.value)); };
   return el("div", { className: "inline" }, input, label);
 }
 
@@ -278,8 +291,8 @@ function renderLighting() {
   const info = STRIP_MODES.find((m) => m.mode === s.mode);
 
   const mode = el("select");
-  STRIP_MODES.forEach((m) => mode.append(el("option", { value: String(m.mode), textContent: m.label, selected: m.mode === s.mode })));
-  if (!info) mode.append(el("option", { value: String(s.mode), textContent: `Modo ${s.mode} (desconhecido)`, selected: true }));
+  STRIP_MODES.forEach((m) => mode.append(el("option", { value: String(m.mode), textContent: t(m.label), selected: m.mode === s.mode })));
+  if (!info) mode.append(el("option", { value: String(s.mode), textContent: t("light.unknownMode", { mode: s.mode }), selected: true }));
   mode.onchange = () => update((d) => {
     const pct = speedToPct(d.strip.speed, d.strip.mode);
     d.strip.mode = Number(mode.value);
@@ -293,38 +306,33 @@ function renderLighting() {
   const sync = el("input", { type: "checkbox", checked: synced });
   sync.onchange = async () => {
     settings = { ...settings, sync_strip_to_dpi: sync.checked };
-    try {
-      await invoke("set_settings", { settings });
-    } catch (e) {
-      toast(`Configuração: ${e}`, "err");
-    }
+    await saveSettings();
     update(() => {}, true);
   };
 
   $("#led-strip").replaceChildren(
-    el("h3", { textContent: "Faixa RGB lateral" }),
-    el("label", { className: "field" }, "Efeito", mode),
-    el("label", { className: "field" }, "Cor", color),
-    el("label", { className: "field check" }, sync, el("span", {}, "Acompanhar a cor do nível de DPI",
-      el("small", { textContent: "Ao trocar o DPI, a faixa assume a cor do nível. Precisa do app aberto ou na bandeja." }))),
-    el("label", { className: "field" }, "Velocidade",
-      pctSlider(speedToPct(s.speed, s.mode), (v) => update((d) => (d.strip.speed = pctToSpeed(v, d.strip.mode))), !info?.speed)),
-    el("label", { className: "field" }, "Brilho",
-      pctSlider(brightToPct(s.brightness), (v) => update((d) => (d.strip.brightness = pctToBright(v))), s.mode === 4)),
-    el("p", { className: "hint", textContent: "Velocidade e brilho vão além dos limites do app oficial." }),
+    el("h3", { textContent: t("light.strip") }),
+    el("label", { className: "field" }, t("light.effect"), mode),
+    el("label", { className: "field" }, t("light.color"), color),
+    el("label", { className: "field check" }, sync, el("span", {}, t("light.sync"), el("small", { textContent: t("light.syncHint") }))),
+    el("label", { className: "field" }, t("light.speed"),
+      rangeSlider(100, speedToPct(s.speed, s.mode), "%", (v) => update((d) => (d.strip.speed = pctToSpeed(v, d.strip.mode))), !info?.speed)),
+    el("label", { className: "field" }, t("light.brightness"),
+      rangeSlider(100, brightToPct(s.brightness), "%", (v) => update((d) => (d.strip.brightness = pctToBright(v))), s.mode === 4)),
+    el("p", { className: "hint", textContent: t("light.beyond") }),
   );
 
   const w = c.dpi_led;
   const wmode = el("select");
-  WHEEL_MODES.forEach((m) => wmode.append(el("option", { value: String(m.mode), textContent: m.label, selected: m.mode === w.mode })));
-  if (!WHEEL_MODES.some((m) => m.mode === w.mode)) wmode.append(el("option", { value: String(w.mode), textContent: `Modo ${w.mode}`, selected: true }));
+  WHEEL_MODES.forEach((m) => wmode.append(el("option", { value: String(m.mode), textContent: t(m.label), selected: m.mode === w.mode })));
+  if (!WHEEL_MODES.some((m) => m.mode === w.mode)) wmode.append(el("option", { value: String(w.mode), textContent: t("light.unknownMode", { mode: w.mode }), selected: true }));
   wmode.onchange = () => update((d) => (d.dpi_led.mode = Number(wmode.value)), true);
 
   $("#led-wheel").replaceChildren(
-    el("h3", { textContent: "Luz da roda (indicador de DPI)" }),
-    el("p", { className: "hint", textContent: "Mostra a cor do nível de DPI ativo — as cores ficam na aba DPI." }),
-    el("label", { className: "field" }, "Efeito", wmode),
-    el("label", { className: "field" }, "Velocidade", levelSlider(w.speed, (v) => update((d) => (d.dpi_led.speed = v)), w.mode !== 2)),
+    el("h3", { textContent: t("light.wheel") }),
+    el("p", { className: "hint", textContent: t("light.wheelHint") }),
+    el("label", { className: "field" }, t("light.effect"), wmode),
+    el("label", { className: "field" }, t("light.speed"), rangeSlider(10, w.speed, "", (v) => update((d) => (d.dpi_led.speed = v)), w.mode !== 2)),
   );
 }
 
@@ -338,13 +346,11 @@ function render() {
 }
 
 // ---- Perfis ----
-const isDirty = () => !!saved && !!draft && JSON.stringify(saved) !== JSON.stringify(draft);
-
 async function saveProfiles() {
   try {
     await invoke("save_profiles", { profiles });
   } catch (e) {
-    toast(`Perfis: ${e}`, "err");
+    toast(`${t("err.profiles")}: ${e}`, "err");
   }
 }
 
@@ -352,7 +358,7 @@ async function saveSettings() {
   try {
     await invoke("set_settings", { settings });
   } catch (e) {
-    toast(`Configuração: ${e}`, "err");
+    toast(`${t("err.settings")}: ${e}`, "err");
   }
 }
 
@@ -362,7 +368,7 @@ function profileSummary(c: Config): string {
 }
 
 async function pickApp(p: Profile) {
-  const path = await open({ multiple: false, filters: [{ name: "Programa", extensions: ["exe"] }] });
+  const path = await open({ multiple: false, filters: [{ name: t("profiles.programFilter"), extensions: ["exe"] }] });
   if (!path || Array.isArray(path)) return;
   addApp(p, path.split(/[\\/]/).pop()!);
 }
@@ -376,58 +382,93 @@ function addApp(p: Profile, name: string) {
   renderProfiles();
 }
 
+function profileOptions(none: I18nKey, value: string | null): HTMLOptionElement[] {
+  return [el("option", { value: "", textContent: t(none) }),
+    ...profiles.map((p) => el("option", { value: p.id, textContent: p.name, selected: p.id === value }))];
+}
+
+function scheduleEditor(p: Profile): HTMLElement {
+  const enabled = el("input", { type: "checkbox", checked: !!p.schedule });
+  const sched = p.schedule ?? { start: "09:00", end: "18:00", days: [1, 2, 3, 4, 5] };
+  const start = el("input", { type: "time", value: sched.start, disabled: !p.schedule, className: "time" });
+  const end = el("input", { type: "time", value: sched.end, disabled: !p.schedule, className: "time" });
+  const commit = () => {
+    p.schedule = enabled.checked ? { start: start.value || "00:00", end: end.value || "00:00", days: sched.days } : null;
+    saveProfiles();
+  };
+  enabled.onchange = () => { commit(); renderProfiles(); };
+  start.onchange = commit;
+  end.onchange = commit;
+
+  const names = t("days.short").split(",");
+  const days = el("div", { className: "days" }, ...names.map((label, d) => {
+    const on = sched.days.includes(d);
+    const b = el("button", { className: `day ${on ? "on" : ""}`, textContent: label, disabled: !p.schedule });
+    b.onclick = () => {
+      sched.days = on ? sched.days.filter((x) => x !== d) : [...sched.days, d].sort();
+      commit();
+      renderProfiles();
+    };
+    return b;
+  }));
+
+  return el("div", { className: "schedule" },
+    el("label", { className: "field check", title: t("profiles.scheduleHint") }, enabled, el("span", {}, t("profiles.schedule"))),
+    el("div", { className: "inline" }, start, "–", end),
+    days);
+}
+
 function renderProfiles() {
   $<HTMLInputElement>("#auto-switch").checked = settings.auto_switch;
-
-  const def = $<HTMLSelectElement>("#default-profile");
-  def.replaceChildren(el("option", { value: "", textContent: "Nenhum (mantém o atual)" }),
-    ...profiles.map((p) => el("option", { value: p.id, textContent: p.name })));
-  def.value = settings.default_profile ?? "";
+  $<HTMLSelectElement>("#default-profile").replaceChildren(...profileOptions("profiles.none", settings.default_profile));
+  $<HTMLSelectElement>("#low-battery-profile").replaceChildren(...profileOptions("profiles.none", settings.low_battery_profile));
+  $<HTMLSelectElement>("#low-battery-threshold").replaceChildren(...[10, 20, 30, 40].map((v) =>
+    el("option", { value: String(v), textContent: `≤ ${v}%`, selected: v === settings.low_battery_threshold })));
 
   const list = $("#profile-list");
   if (!profiles.length) {
-    list.replaceChildren(el("p", { className: "hint", textContent: "Nenhum perfil ainda. Ajuste o mouse e clique em \"Novo perfil\"." }));
+    list.replaceChildren(el("p", { className: "hint", textContent: t("profiles.empty") }));
     return;
   }
   list.replaceChildren(...profiles.map((p) => {
     const name = el("input", { type: "text", value: p.name, className: "profile-name", maxLength: 40 });
-    name.onchange = () => { p.name = name.value.trim() || "Sem nome"; saveProfiles(); renderProfiles(); };
+    name.onchange = () => { p.name = name.value.trim() || t("profiles.noName"); saveProfiles(); renderProfiles(); };
 
     const chips = el("div", { className: "chips" }, ...p.apps.map((a) => {
-      const x = el("button", { className: "chip-x", title: `Remover ${a}`, textContent: "×" });
+      const x = el("button", { className: "chip-x", title: t("profiles.remove", { name: a }), textContent: "×" });
       x.onclick = () => { p.apps = p.apps.filter((b) => b !== a); saveProfiles(); renderProfiles(); };
       return el("span", { className: "chip" }, a, x);
     }));
-    const typed = el("input", { type: "text", placeholder: "programa.exe", className: "app-input" });
+    const typed = el("input", { type: "text", placeholder: "app.exe", className: "app-input" });
     typed.onkeydown = (e) => { if (e.key === "Enter") addApp(p, typed.value); };
-    const browse = el("button", { className: "ghost small", textContent: "Procurar…" });
+    const browse = el("button", { className: "ghost small", textContent: t("profiles.browse") });
     browse.onclick = () => pickApp(p);
 
-    const applyBtn = el("button", { className: "primary small", textContent: "Aplicar no mouse" });
-    applyBtn.onclick = () => guarded("Perfil", async () => {
+    const applyBtn = el("button", { className: "primary small", textContent: t("profiles.apply") });
+    applyBtn.onclick = () => guarded("err.profile", async () => {
       const cfg = await invoke<Config>("apply_profile", { id: p.id });
       activeProfile = p.id;
       saved = cfg;
       draft = clone(cfg);
       render();
       renderProfiles();
-      toast(`Perfil "${p.name}" aplicado`);
+      toast(t("profiles.applied", { name: p.name }));
     });
-    const updateBtn = el("button", { className: "ghost small", textContent: "Usar configuração atual",
-      title: "Substitui o conteúdo do perfil pela configuração que está no mouse agora" });
+    const updateBtn = el("button", { className: "ghost small", textContent: t("profiles.useCurrent"), title: t("profiles.useCurrentHint") });
     updateBtn.onclick = () => {
       if (!saved) return;
-      if (isDirty()) { toast("Aplique ou descarte as alterações antes.", "err"); return; }
+      if (isDirty()) { toast(t("apply.applyFirst"), "err"); return; }
       p.config = clone(saved);
       saveProfiles();
       renderProfiles();
-      toast(`Perfil "${p.name}" atualizado`);
+      toast(t("profiles.updated", { name: p.name }));
     };
-    const del = el("button", { className: "ghost small danger", textContent: "Excluir" });
+    const del = el("button", { className: "ghost small danger", textContent: t("profiles.delete") });
     del.onclick = async () => {
-      if (!(await ask(`Excluir o perfil "${p.name}"?`, { title: "Perfis", kind: "warning" }))) return;
+      if (!(await ask(t("profiles.deleteAsk", { name: p.name }), { title: t("tab.profiles"), kind: "warning" }))) return;
       profiles = profiles.filter((q) => q.id !== p.id);
       if (settings.default_profile === p.id) settings.default_profile = null;
+      if (settings.low_battery_profile === p.id) settings.low_battery_profile = null;
       if (activeProfile === p.id) activeProfile = null;
       await saveProfiles();
       renderProfiles();
@@ -435,37 +476,125 @@ function renderProfiles() {
 
     return el("div", { className: `card profile ${p.id === activeProfile ? "active" : ""}` },
       el("div", { className: "profile-head" }, name,
-        p.id === activeProfile ? el("span", { className: "tag", textContent: "Ativo" }) : "",
+        p.id === activeProfile ? el("span", { className: "tag", textContent: t("profiles.active") }) : "",
         el("span", { className: "mono", textContent: profileSummary(p.config) })),
-      el("div", { className: "field" }, "Programas", el("div", { className: "inline" }, typed, browse)),
+      el("div", { className: "field" }, t("profiles.programs"), el("div", { className: "inline" }, typed, browse)),
       chips,
+      scheduleEditor(p),
       el("div", { className: "actions" }, applyBtn, updateBtn, del),
     );
   }));
 }
 
 async function newProfile() {
-  if (!saved) { toast("Conecte o mouse primeiro.", "err"); return; }
-  if (isDirty()) { toast("Aplique ou descarte as alterações antes.", "err"); return; }
-  profiles.push({ id: crypto.randomUUID(), name: `Perfil ${profiles.length + 1}`, config: clone(saved), apps: [] });
+  if (!saved) { toast(t("apply.connectFirst"), "err"); return; }
+  if (isDirty()) { toast(t("apply.applyFirst"), "err"); return; }
+  profiles.push({ id: crypto.randomUUID(), name: t("profiles.defaultName", { n: profiles.length + 1 }), config: clone(saved), apps: [], schedule: null });
   await saveProfiles();
   renderProfiles();
   document.querySelector<HTMLInputElement>("#profile-list .card:last-child .profile-name")?.select();
 }
 
+const PROFILE_FILTER = () => [{ name: t("profiles.fileFilter"), extensions: ["m808profiles", "json"] }];
+
+async function exportProfiles() {
+  if (!profiles.length) return;
+  const path = await save({ defaultPath: "m808-perfis.m808profiles", filters: PROFILE_FILTER() });
+  if (!path) return;
+  try {
+    const n = await invoke<number>("export_profiles", { path });
+    toast(t("profiles.exported", { n }));
+  } catch (e) {
+    toast(`${t("err.profiles")}: ${e}`, "err");
+  }
+}
+
+async function importProfiles() {
+  const path = await open({ multiple: false, filters: PROFILE_FILTER() });
+  if (!path || Array.isArray(path)) return;
+  try {
+    const before = profiles.length;
+    profiles = await invoke<Profile[]>("import_profiles", { path });
+    renderProfiles();
+    toast(t("profiles.imported", { n: profiles.length - before }));
+  } catch (e) {
+    toast(`${t("err.profiles")}: ${e}`, "err");
+  }
+}
+
+// ---- Atualizações ----
+function showUpdate(info: UpdateInfo | null) {
+  pendingUpdate = info;
+  const install = $<HTMLButtonElement>("#btn-install-update");
+  install.hidden = !info;
+  if (info) {
+    $("#update-status").textContent = t("update.available", { version: info.version });
+    install.textContent = t("update.install", { version: info.version });
+  }
+}
+
+async function checkUpdate() {
+  const btn = $<HTMLButtonElement>("#btn-check-update");
+  btn.disabled = true;
+  $("#update-status").textContent = t("update.checking");
+  try {
+    const info = await invoke<UpdateInfo | null>("check_update");
+    if (info) showUpdate(info);
+    else $("#update-status").textContent = t("update.latest");
+  } catch (e) {
+    $("#update-status").textContent = t("update.failed", { error: String(e) });
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function installUpdate() {
+  const btn = $<HTMLButtonElement>("#btn-install-update");
+  btn.disabled = true;
+  btn.textContent = t("update.downloading");
+  try {
+    await invoke("install_update"); // o app fecha e reabre já atualizado
+  } catch (e) {
+    toast(`${t("err.update")}: ${e}`, "err");
+    btn.disabled = false;
+    btn.textContent = t("update.retry");
+  }
+}
+
 // ---- Bateria ----
 function renderBattery(level: number | null) {
+  batteryLevel = level;
   const b = $("#battery");
   b.hidden = level == null;
   if (level == null) return;
   b.querySelector("b")!.textContent = `${level}%`;
   b.querySelector<HTMLElement>("i")!.style.setProperty("--level", `${level}%`);
-  b.classList.toggle("low", level <= 20);
-  b.title = `Bateria do mouse: ${level}%`;
+  b.classList.toggle("low", level <= settings.low_battery_threshold);
+  b.title = t("battery.title", { level });
+}
+
+// ---- Idioma ----
+function renderDeviceInfo() {
+  if (!deviceInfo) return;
+  const link = deviceInfo.wireless ? t("system.receiver") : t("system.cable");
+  $("#device-info").textContent = `VID 25A7 · PID ${deviceInfo.pid.toString(16).toUpperCase()} · ${link}`;
+}
+
+/** Re-renderiza tudo que é gerado por código depois de trocar o idioma. */
+function relocalize() {
+  setLang(settings.language);
+  applyStatic();
+  renderStatus();
+  renderDeviceInfo();
+  renderBattery(batteryLevel);
+  showUpdate(pendingUpdate);
+  render();
+  renderProfiles();
+  markDirty();
 }
 
 // ---- Ações ----
-async function guarded<T>(label: string, fn: () => Promise<T>): Promise<T | undefined> {
+async function guarded<T>(label: I18nKey, fn: () => Promise<T>): Promise<T | undefined> {
   if (busy) return;
   busy = true;
   markDirty();
@@ -473,8 +602,8 @@ async function guarded<T>(label: string, fn: () => Promise<T>): Promise<T | unde
   try {
     return await fn();
   } catch (e) {
-    toast(`${label}: ${e}`, "err");
-    setStatus("err", String(e));
+    toast(`${t(label)}: ${e}`, "err");
+    setStatus("err", "status.lost", String(e));
   } finally {
     busy = false;
     document.body.classList.remove("busy");
@@ -483,16 +612,16 @@ async function guarded<T>(label: string, fn: () => Promise<T>): Promise<T | unde
 }
 
 async function connect() {
-  setStatus("wait", "Procurando mouse…");
-  await guarded("Conexão", async () => {
-    const info = await invoke<DeviceInfo>("connect");
-    $("#device-info").textContent = `VID 25A7 · PID ${info.pid.toString(16).toUpperCase()} · ${info.wireless ? "receptor 2.4 GHz" : "cabo USB"}`;
-    setStatus("wait", "Lendo configuração…");
+  setStatus("wait", "status.searching");
+  await guarded("err.connect", async () => {
+    deviceInfo = await invoke<DeviceInfo>("connect");
+    renderDeviceInfo();
+    setStatus("wait", "status.reading");
     saved = await invoke<Config>("read_config");
     draft = clone(saved);
     normalize(draft);
     render();
-    setStatus("ok", `Conectado${info.wireless ? " (sem fio)" : ""}`);
+    setStatus("ok", deviceInfo.wireless ? "status.connectedWireless" : "status.connected");
     renderBattery(await invoke<number | null>("get_battery"));
   });
 }
@@ -500,38 +629,43 @@ async function connect() {
 async function apply() {
   if (!draft) return;
   if (!draft.buttons.some((b) => b.kind === 1 && b.code === 0x01)) {
-    toast("Pelo menos um botão precisa ser clique esquerdo.", "err");
+    toast(t("apply.needLeft"), "err");
     return;
   }
-  await guarded("Aplicar", async () => {
+  await guarded("err.apply", async () => {
     const n = await invoke<number>("apply_config", { config: draft });
     saved = clone(draft!);
-    toast(n ? `Aplicado (${n} bytes gravados)` : "Nada para gravar");
+    toast(n ? t("apply.done", { n }) : t("apply.nothing"));
   });
 }
 
+const BACKUP_FILTER = () => [{ name: t("system.backupFilter"), extensions: ["m808bak"] }];
+
 async function backup() {
-  const path = await save({ defaultPath: "m808-backup.m808bak", filters: [{ name: "Backup M808", extensions: ["m808bak"] }] });
+  const path = await save({ defaultPath: "m808-backup.m808bak", filters: BACKUP_FILTER() });
   if (!path) return;
-  await guarded("Backup", async () => {
+  await guarded("err.backup", async () => {
     await invoke("save_backup", { path });
-    toast("Backup salvo");
+    toast(t("system.backupSaved"));
   });
 }
 
 async function restore() {
-  const path = await open({ multiple: false, filters: [{ name: "Backup M808", extensions: ["m808bak"] }] });
+  const path = await open({ multiple: false, filters: BACKUP_FILTER() });
   if (!path || Array.isArray(path)) return;
-  await guarded("Restaurar", async () => {
+  await guarded("err.restore", async () => {
     saved = await invoke<Config>("restore_backup", { path });
     draft = clone(saved);
     render();
-    toast("Backup restaurado no mouse");
+    toast(t("system.backupRestored"));
   });
 }
 
 // ---- Inicialização ----
 window.addEventListener("DOMContentLoaded", async () => {
+  settings = await invoke<Settings>("get_settings").catch(() => settings);
+  setLang(settings.language);
+
   document.querySelectorAll<HTMLButtonElement>(".tabs button").forEach((b) => {
     b.onclick = () => {
       document.querySelectorAll(".tabs button").forEach((x) => x.classList.toggle("active", x === b));
@@ -547,7 +681,7 @@ window.addEventListener("DOMContentLoaded", async () => {
       await invoke("set_autostart", { enabled: autostart.checked });
     } catch (e) {
       autostart.checked = !autostart.checked;
-      toast(`Inicialização automática: ${e}`, "err");
+      toast(`${t("err.autostart")}: ${e}`, "err");
     }
   };
   $<HTMLSelectElement>("#polling").onchange = (e) => update((d) => (d.polling_hz = Number((e.target as HTMLSelectElement).value)));
@@ -556,6 +690,34 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#btn-discard").onclick = () => { draft = clone(saved); normalize(draft); render(); };
   $("#btn-backup").onclick = backup;
   $("#btn-restore").onclick = restore;
+
+  const language = $<HTMLSelectElement>("#language");
+  language.value = settings.language;
+  language.onchange = () => { settings.language = language.value as LangSetting; saveSettings(); relocalize(); };
+
+  const showOsd = $<HTMLInputElement>("#show-osd");
+  showOsd.checked = settings.show_osd;
+  showOsd.onchange = () => { settings.show_osd = showOsd.checked; saveSettings(); };
+
+  const trayIcon = $<HTMLSelectElement>("#tray-icon");
+  trayIcon.value = settings.tray_icon;
+  trayIcon.onchange = () => { settings.tray_icon = trayIcon.value as Settings["tray_icon"]; saveSettings(); };
+
+  $<HTMLInputElement>("#auto-switch").onchange = (e) => { settings.auto_switch = (e.target as HTMLInputElement).checked; saveSettings(); };
+  $<HTMLSelectElement>("#default-profile").onchange = (e) => { settings.default_profile = (e.target as HTMLSelectElement).value || null; saveSettings(); };
+  $<HTMLSelectElement>("#low-battery-profile").onchange = (e) => { settings.low_battery_profile = (e.target as HTMLSelectElement).value || null; saveSettings(); };
+  $<HTMLSelectElement>("#low-battery-threshold").onchange = (e) => {
+    settings.low_battery_threshold = Number((e.target as HTMLSelectElement).value);
+    saveSettings();
+    renderBattery(batteryLevel);
+  };
+  $("#btn-new-profile").onclick = newProfile;
+  $("#btn-export-profiles").onclick = exportProfiles;
+  $("#btn-import-profiles").onclick = importProfiles;
+  $("#btn-check-update").onclick = checkUpdate;
+  $("#btn-install-update").onclick = installUpdate;
+  getVersion().then((v) => ($("#app-version").textContent = `v${v}`));
+  invoke<UpdateInfo | null>("pending_update").then(showUpdate);
 
   // Mudanças feitas pelos botões do próprio mouse (ou pela bandeja): refletem sem virar "alteração".
   listen<DeviceEvent>("device-event", ({ payload }) => {
@@ -567,22 +729,17 @@ window.addEventListener("DOMContentLoaded", async () => {
     }
     render();
   });
-  listen("device-lost", () => setStatus("err", "Mouse desconectado — aguardando…"));
+  listen("device-lost", () => setStatus("err", "status.lost"));
   // O processo de fundo reconecta sozinho quando o mouse volta.
   listen("device-connected", () => { if (!busy) connect(); });
-
-  const showOsd = $<HTMLInputElement>("#show-osd");
-  showOsd.onchange = () => { settings.show_osd = showOsd.checked; saveSettings(); };
-  $<HTMLInputElement>("#auto-switch").onchange = (e) => {
-    settings.auto_switch = (e.target as HTMLInputElement).checked;
-    saveSettings();
-  };
-  $<HTMLSelectElement>("#default-profile").onchange = (e) => {
-    settings.default_profile = (e.target as HTMLSelectElement).value || null;
-    saveSettings();
-  };
-  $("#btn-new-profile").onclick = newProfile;
-
+  listen<UpdateInfo>("update-available", ({ payload }) => showUpdate(payload));
+  listen<number | null>("battery", ({ payload }) => renderBattery(payload));
+  listen<Settings>("settings-changed", ({ payload }) => {
+    const langChanged = payload.language !== settings.language;
+    settings = payload;
+    if (langChanged) relocalize();
+    else renderProfiles();
+  });
   // Perfil aplicado pela troca automática ou pela bandeja.
   listen<Config>("config-changed", async ({ payload }) => {
     const hadEdits = isDirty();
@@ -593,16 +750,9 @@ window.addEventListener("DOMContentLoaded", async () => {
     const view = await invoke<ProfilesView>("get_profiles");
     activeProfile = view.active;
     renderProfiles();
-    if (hadEdits) toast("Um perfil foi aplicado; suas alterações não salvas foram mantidas na tela.");
+    if (hadEdits) toast(t("profiles.appliedKeepEdits"));
   });
-  listen<Settings>("settings-changed", ({ payload }) => { settings = payload; renderProfiles(); });
-  listen<number | null>("battery", ({ payload }) => renderBattery(payload));
 
-  settings = await invoke<Settings>("get_settings").catch(() => settings);
-  showOsd.checked = settings.show_osd;
-  const trayIcon = $<HTMLSelectElement>("#tray-icon");
-  trayIcon.value = settings.tray_icon;
-  trayIcon.onchange = () => { settings.tray_icon = trayIcon.value as Settings["tray_icon"]; saveSettings(); };
   const view = await invoke<ProfilesView>("get_profiles").catch(() => ({ profiles: [], active: null }));
   profiles = view.profiles;
   activeProfile = view.active;

@@ -32,6 +32,7 @@ fn glyph(c: char) -> Option<[u8; 7]> {
         '8' => [0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E],
         '9' => [0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C],
         '.' => [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04],
+        'K' => [0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11],
         _ => return None,
     })
 }
@@ -105,13 +106,13 @@ impl Canvas {
     }
 }
 
-/// Texto curto para o DPI: "1.6" = 1600, "16" = 16000.
+/// Texto curto para o DPI: milhares redondos com K ("2K", "16K"), senão uma casa ("1.6").
 pub fn dpi_label(dpi: u32) -> String {
-    if dpi < 10_000 {
-        let tenths = (dpi + 50) / 100;
-        format!("{}.{}", tenths / 10, tenths % 10)
+    let tenths = (dpi + 50) / 100;
+    if tenths.is_multiple_of(10) || dpi >= 10_000 {
+        format!("{}K", (dpi + 500) / 1000)
     } else {
-        format!("{}", (dpi + 500) / 1000)
+        format!("{}.{}", tenths / 10, tenths % 10)
     }
 }
 
@@ -166,7 +167,9 @@ mod tests {
         assert_eq!(dpi_label(1600), "1.6");
         assert_eq!(dpi_label(800), "0.8");
         assert_eq!(dpi_label(2450), "2.5");
-        assert_eq!(dpi_label(16000), "16");
+        assert_eq!(dpi_label(2000), "2K");
+        assert_eq!(dpi_label(12400), "12K");
+        assert_eq!(dpi_label(16000), "16K");
     }
 
     #[test]
@@ -200,6 +203,7 @@ mod dump {
         let samples: Vec<(&str, Vec<u8>)> = vec![
             ("dpi_1600_white", super::dpi_icon(1600, [255, 255, 255])),
             ("dpi_2000_yellow", super::dpi_icon(2000, [255, 255, 0])),
+            ("dpi_12400_green", super::dpi_icon(12400, [0, 200, 80])),
             ("dpi_800_blue", super::dpi_icon(800, [0, 0, 255])),
             ("dpi_16000_red", super::dpi_icon(16000, [229, 56, 59])),
             ("bat_90", super::battery_icon(90)),

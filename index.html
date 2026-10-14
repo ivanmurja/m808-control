@@ -8,47 +8,48 @@
     <script type="module" src="/src/main.ts" defer></script>
   </head>
   <body>
+    <!-- Textos: chaves data-i18n* traduzidas por src/i18n.ts (o conteúdo aqui é só o padrão). -->
     <header class="topbar">
       <div class="brand">
         <span class="logo" aria-hidden="true"></span>
         <div>
           <h1>M808 Control</h1>
-          <p class="sub">Redragon M808-KS · configurador open source</p>
+          <p class="sub" data-i18n="app.subtitle">Redragon Storm Pro (M808-KS) · configurador open source</p>
         </div>
       </div>
       <div class="status">
-        <span id="battery" class="battery" hidden title="Bateria do mouse"><i></i><b></b></span>
+        <span id="battery" class="battery" hidden><i></i><b></b></span>
         <span id="status-dot" class="dot"></span>
-        <span id="status-text">Procurando mouse…</span>
-        <button id="btn-reconnect" class="ghost">Reconectar</button>
+        <span id="status-text" data-i18n="status.searching">Procurando mouse…</span>
+        <button id="btn-reconnect" class="ghost" data-i18n="status.reconnect">Reconectar</button>
       </div>
     </header>
 
     <div class="layout">
       <nav class="tabs" role="tablist">
-        <button role="tab" data-tab="dpi" class="active">DPI</button>
-        <button role="tab" data-tab="buttons">Botões</button>
-        <button role="tab" data-tab="lighting">Iluminação</button>
-        <button role="tab" data-tab="profiles">Perfis</button>
-        <button role="tab" data-tab="system">Sistema</button>
+        <button role="tab" data-tab="dpi" class="active" data-i18n="tab.dpi">DPI</button>
+        <button role="tab" data-tab="buttons" data-i18n="tab.buttons">Botões</button>
+        <button role="tab" data-tab="lighting" data-i18n="tab.lighting">Iluminação</button>
+        <button role="tab" data-tab="profiles" data-i18n="tab.profiles">Perfis</button>
+        <button role="tab" data-tab="system" data-i18n="tab.system">Sistema</button>
       </nav>
 
       <main>
         <section id="tab-dpi" class="panel active">
           <div class="panel-head">
-            <h2>Níveis de DPI</h2>
+            <h2 data-i18n="dpi.title">Níveis de DPI</h2>
             <label class="inline">
-              Níveis no ciclo
+              <span data-i18n="dpi.count">Níveis no ciclo</span>
               <select id="level-count"></select>
             </label>
           </div>
-          <p class="hint">O nível marcado é o que fica ativo. O botão de DPI do mouse alterna entre os níveis do ciclo.</p>
+          <p class="hint" data-i18n="dpi.hint">O nível marcado é o que fica ativo. O botão de DPI do mouse alterna entre os níveis do ciclo.</p>
           <div id="dpi-levels" class="levels"></div>
         </section>
 
         <section id="tab-buttons" class="panel">
-          <div class="panel-head"><h2>Botões</h2></div>
-          <p class="hint">Clique num botão do mouse para escolher a função. Pelo menos um precisa ficar como clique esquerdo.</p>
+          <div class="panel-head"><h2 data-i18n="tab.buttons">Botões</h2></div>
+          <p class="hint" data-i18n="buttons.hint">Clique num botão do mouse para escolher a função. Pelo menos um precisa ficar como clique esquerdo.</p>
           <div class="buttons-layout">
             <div id="mouse-view" class="mouse-view"></div>
             <div id="button-list" class="rows"></div>
@@ -56,7 +57,7 @@
         </section>
 
         <section id="tab-lighting" class="panel">
-          <div class="panel-head"><h2>Iluminação</h2></div>
+          <div class="panel-head"><h2 data-i18n="tab.lighting">Iluminação</h2></div>
           <div class="cards">
             <div class="card" id="led-strip"></div>
             <div class="card" id="led-wheel"></div>
@@ -65,34 +66,48 @@
 
         <section id="tab-profiles" class="panel">
           <div class="panel-head">
-            <h2>Perfis</h2>
-            <button id="btn-new-profile" class="primary">Novo perfil</button>
+            <h2 data-i18n="tab.profiles">Perfis</h2>
+            <div class="actions">
+              <button id="btn-import-profiles" class="ghost" data-i18n="profiles.import">Importar…</button>
+              <button id="btn-export-profiles" class="ghost" data-i18n="profiles.export">Exportar…</button>
+              <button id="btn-new-profile" class="primary" data-i18n="profiles.new">Novo perfil</button>
+            </div>
           </div>
-          <p class="hint">Um perfil guarda toda a configuração do mouse (DPI, botões, luzes, polling). O novo perfil é criado a partir da configuração atual do mouse.</p>
+          <p class="hint" data-i18n="profiles.hint">Um perfil guarda toda a configuração do mouse (DPI, botões, luzes, polling). O novo perfil é criado a partir da configuração atual do mouse.</p>
           <div class="rows">
             <div class="row">
               <span class="label">
-                Trocar de perfil pelo programa em uso
-                <small>Ao abrir um programa da lista de um perfil, ele é aplicado. Precisa do app aberto ou na bandeja.</small>
+                <span data-i18n="profiles.autoSwitch">Trocar de perfil pelo programa em uso</span>
+                <small data-i18n="profiles.autoSwitchHint">Ao abrir um programa da lista de um perfil, ele é aplicado. Precisa do app aberto ou na bandeja.</small>
               </span>
               <label class="switch"><input type="checkbox" id="auto-switch" /><span></span></label>
             </div>
             <div class="row">
               <span class="label">
-                Perfil padrão
-                <small>Usado quando nenhum programa das listas está em primeiro plano</small>
+                <span data-i18n="profiles.default">Perfil padrão</span>
+                <small data-i18n="profiles.defaultHint">Usado quando nenhuma regra (programa, horário, bateria) se aplica</small>
               </span>
               <select id="default-profile"></select>
+            </div>
+            <div class="row">
+              <span class="label">
+                <span data-i18n="profiles.lowBattery">Perfil de bateria fraca</span>
+                <small data-i18n="profiles.lowBatteryHint">Aplicado quando a bateria chega no limite (ex.: um perfil com as luzes apagadas)</small>
+              </span>
+              <div class="actions">
+                <select id="low-battery-profile"></select>
+                <select id="low-battery-threshold"></select>
+              </div>
             </div>
           </div>
           <div id="profile-list" class="profiles"></div>
         </section>
 
         <section id="tab-system" class="panel">
-          <div class="panel-head"><h2>Sistema</h2></div>
+          <div class="panel-head"><h2 data-i18n="tab.system">Sistema</h2></div>
           <div class="rows">
             <div class="row">
-              <span class="label">Taxa de atualização (polling)</span>
+              <span class="label" data-i18n="system.polling">Taxa de atualização (polling)</span>
               <select id="polling">
                 <option value="125">125 Hz</option>
                 <option value="250">250 Hz</option>
@@ -102,38 +117,59 @@
             </div>
             <div class="row">
               <span class="label">
-                Iniciar com o sistema
-                <small>Abre minimizado na bandeja, ao lado do relógio</small>
+                <span data-i18n="system.language">Idioma</span>
+              </span>
+              <select id="language">
+                <option value="auto" data-i18n="system.languageAuto">Automático (do sistema)</option>
+                <option value="pt">Português</option>
+                <option value="en">English</option>
+              </select>
+            </div>
+            <div class="row">
+              <span class="label">
+                <span data-i18n="system.autostart">Iniciar com o sistema</span>
+                <small data-i18n="system.autostartHint">Abre minimizado na bandeja, ao lado do relógio</small>
               </span>
               <label class="switch"><input type="checkbox" id="autostart" /><span></span></label>
             </div>
             <div class="row">
               <span class="label">
-                Ícone da bandeja
-                <small>O que aparece no ícone ao lado do relógio</small>
+                <span data-i18n="system.trayIcon">Ícone da bandeja</span>
+                <small data-i18n="system.trayIconHint">O que aparece no ícone ao lado do relógio</small>
               </span>
               <select id="tray-icon">
-                <option value="dpi">DPI atual (na cor do nível)</option>
-                <option value="battery">Bateria</option>
-                <option value="logo">Logo do app</option>
+                <option value="dpi" data-i18n="system.trayIconDpi">DPI atual (na cor do nível)</option>
+                <option value="battery" data-i18n="system.trayIconBattery">Bateria</option>
+                <option value="logo" data-i18n="system.trayIconLogo">Logo do app</option>
               </select>
             </div>
             <div class="row">
               <span class="label">
-                Aviso na tela
-                <small>Mostra "2000 DPI", "Perfil: Jogo" etc. ao trocar pelo mouse ou pela bandeja</small>
+                <span data-i18n="system.osd">Aviso na tela</span>
+                <small data-i18n="system.osdHint">Mostra "2000 DPI", "Perfil: Jogo" etc. ao trocar pelo mouse ou pela bandeja</small>
               </span>
               <label class="switch"><input type="checkbox" id="show-osd" /><span></span></label>
             </div>
             <div class="row">
-              <span class="label">Backup da memória do mouse</span>
+              <span class="label" data-i18n="system.backup">Backup da memória do mouse</span>
               <div class="actions">
-                <button id="btn-backup" class="ghost">Salvar backup…</button>
-                <button id="btn-restore" class="ghost">Restaurar backup…</button>
+                <button id="btn-backup" class="ghost" data-i18n="system.backupSave">Salvar backup…</button>
+                <button id="btn-restore" class="ghost" data-i18n="system.backupRestore">Restaurar backup…</button>
               </div>
             </div>
             <div class="row">
-              <span class="label">Dispositivo</span>
+              <span class="label">
+                <span data-i18n="system.version">Versão do app</span>
+                <small id="update-status" data-i18n="update.auto">O app verifica atualizações sozinho ao abrir</small>
+              </span>
+              <div class="actions">
+                <span id="app-version" class="mono"></span>
+                <button id="btn-check-update" class="ghost" data-i18n="update.check">Verificar atualizações</button>
+                <button id="btn-install-update" class="primary" hidden></button>
+              </div>
+            </div>
+            <div class="row">
+              <span class="label" data-i18n="system.device">Dispositivo</span>
               <span id="device-info" class="mono">—</span>
             </div>
           </div>
@@ -142,10 +178,10 @@
     </div>
 
     <footer class="applybar" id="applybar">
-      <span id="dirty-text">Sem alterações</span>
+      <span id="dirty-text" data-i18n="apply.clean">Sem alterações</span>
       <div class="actions">
-        <button id="btn-discard" class="ghost" disabled>Descartar</button>
-        <button id="btn-apply" class="primary" disabled>Aplicar no mouse</button>
+        <button id="btn-discard" class="ghost" disabled data-i18n="apply.discard">Descartar</button>
+        <button id="btn-apply" class="primary" disabled data-i18n="apply.apply">Aplicar no mouse</button>
       </div>
     </footer>
 

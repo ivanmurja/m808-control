@@ -54,9 +54,13 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # assina os instaladores para a atualização automática (chave fica só nos secrets)
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "M808 Control ${{ github.ref_name }}"
           releaseBody: "Veja o CHANGELOG.md. No Windows, o SmartScreen pode avisar que o instalador não é assinado: clique em \"Mais informações\" → \"Executar assim mesmo\"."
           releaseDraft: true
+          includeUpdaterJson: true
           prerelease: false

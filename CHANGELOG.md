@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.1.0 — 2026-10-13
+
+### Novidades
+- **Perfis** salvos no PC, aplicados pela janela ou pela bandeja
+- **Troca automática de perfil** pelo programa em uso, por **horário** (dias e intervalo, inclusive
+  cruzando a meia-noite) ou por **bateria fraca**, com perfil padrão
+- **Exportar e importar perfis** (`.m808profiles`)
+- **Bateria** do mouse na janela, no menu e no ícone da bandeja; aviso de bateria fraca
+- **Ícone da bandeja dinâmico**: DPI atual na cor do nível ("1.6", "2K") ou bateria
+- **Aviso na tela** ao trocar DPI, polling ou perfil (janela criada só durante o aviso)
+- **Faixa RGB com velocidade e brilho contínuos** de 1 a 100%, além dos limites do app oficial
+- **Atualização automática** pelas releases do GitHub, com assinatura verificada
+- **Interface em inglês** (automático pelo idioma do sistema ou escolha manual)
+- **Layout responsivo**: janela pode ficar bem menor; abas vão para o topo em telas estreitas
+- Vista do mouse redesenhada, mais fiel ao Storm Pro (faixa RGB dos dois lados)
+
 ## 1.0.0 — 2026-10-13
 
 Primeira versão estável.

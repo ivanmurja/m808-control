@@ -29,8 +29,14 @@ chk = (0x55 - soma(bytes 0..15)) & 0xFF     →  soma de todos os 17 bytes ≡ 0
 Resposta (input report `0x09`): `byte1` = eco do comando, `byte2` = status (`00` OK, `01` erro de
 parâmetro ✔), dados no mesmo layout do pedido.
 
-Se `byte1 == 0x0A` é um **evento espontâneo** do mouse: `byte6` = flags; com bit 0 ligado,
-`byte7` = novo nível de DPI (0-based).
+Se `byte1 == 0x0A` é um **evento espontâneo** do mouse. `byte6` = flags:
+
+| bit | significado | valor |
+|-----|-------------|-------|
+| 0 | troca de nível de DPI pelo botão ✔ | `byte7` = nível (0-based) |
+| 1 | troca de polling pelo botão ✔ | `byte8 & 0x0F` = código de polling |
+| 2 | reset de fábrica executado | — |
+| 5, 6, 7 | luzes ligadas/desligadas (botão de luzes) | `byte8` bits 5, 6, 7 |
 
 O receptor responde sozinho aos comandos `0x01`–`0x04`. Leitura/escrita da EEPROM vai até o mouse:
 se ele estiver em repouso o primeiro pacote se perde — reenviar ✔.
@@ -42,7 +48,7 @@ se ele estiver em repouso o primeiro pacote se perde — reenviar ✔.
 | `0x01` | Handshake ✔ | `00 00 00 04 r0 r1 r2 r3` (r = aleatórios 1..100) |
 | `0x02` | "TellDrvStatus" | `00 00 00 01 02` |
 | `0x03` | ? | — |
-| `0x04` | ? (verificação; responde `[5]=02 [6]=09`) | — |
+| `0x04` | Status ✔ — `resp[6]` = **bateria 0..10** (×10 = %); `resp[5]` = `02` (?) | — |
 | `0x07` | Escrever EEPROM ✔ | `00 addrH addrL len dados[≤10]` |
 | `0x08` | Ler EEPROM ✔ | `00 addrH addrL len(≤10)` → dados em `resp[6..]` |
 | `0x09` | Enviado pelo app oficial após certas gravações | — |
@@ -81,7 +87,11 @@ Quase todo campo tem checksum: entradas `[a, b, c, 0x55-a-b-c]` ou pares `[v, 0x
 | `04` | Desligado | cor fica guardada |
 | `05`+ | respiração rápida | inválido — fallback do firmware |
 
-Brilho: tabela `19 32 4B 64 7D 96 AF C8 E1 FF` (níveis 1..10).
+Brilho: tabela `19 32 4B 64 7D 96 AF C8 E1 FF` (níveis 1..10 do app oficial).
+
+**Velocidade e brilho aceitam qualquer valor 1..255** ✔ — testado: `0x50` deixa a onda bem mais lenta
+que o mínimo oficial (`0x2D`), `0x01` bem mais rápida que o máximo (`0x03`) e brilho `0x08` mais fraco
+que o mínimo (`0x19`).
 
 ### LED da roda (`0x4C`) ✔
 

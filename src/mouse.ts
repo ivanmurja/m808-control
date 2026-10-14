@@ -1,9 +1,12 @@
 // Vista de cima do Redragon Storm Pro (M808-KS) — ilustração própria, com áreas clicáveis.
 
+import type { I18nKey } from "./i18n";
+
 export interface PhysicalButton {
   /** Número exibido (igual ao do manual / software oficial). */
   n: number;
-  name: string;
+  /** Chave de tradução do nome (ver i18n.ts). */
+  name: I18nKey;
   /** Posição na matriz de 16 slots da EEPROM. */
   slot: number;
   /** Forma clicável no SVG. */
@@ -24,21 +27,21 @@ const STRIP_R = "M209 96 C215 150 219 240 210 318 C203 362 184 390 152 402";
 const CHANNEL = "M110 26 C110 20 148 20 148 26 L150 248 C150 270 108 270 108 248 Z";
 
 export const PHYSICAL_BUTTONS: PhysicalButton[] = [
-  { n: 1, name: "Botão esquerdo", slot: 0, badge: [70, 84],
+  { n: 1, name: "btn.left", slot: 0, badge: [70, 84],
     shape: `<path d="M106 20 C80 16 48 34 40 80 C35 114 46 152 50 200 L106 200 Z"/>` },
-  { n: 2, name: "Botão direito", slot: 1, badge: [188, 84],
+  { n: 2, name: "btn.right", slot: 1, badge: [188, 84],
     shape: `<path d="M152 20 C182 18 207 44 213 100 C217 140 219 176 219 212 L152 212 Z"/>` },
-  { n: 3, name: "Roda (clique)", slot: 2, badge: [129, 18],
+  { n: 3, name: "btn.wheel", slot: 2, badge: [129, 18],
     shape: `<rect class="wheel" x="117" y="40" width="24" height="64" rx="12"/>` },
-  { n: 4, name: "Lateral (frente)", slot: 4, badge: [16, 214],
+  { n: 4, name: "btn.sideFront", slot: 4, badge: [16, 214],
     shape: `<path d="M45 194 C43 208 43 222 45 236 L56 235 C54 221 54 208 56 195 Z"/>` },
-  { n: 5, name: "Lateral (trás)", slot: 3, badge: [16, 264],
+  { n: 5, name: "btn.sideBack", slot: 3, badge: [16, 264],
     shape: `<path d="M46 246 C45 260 46 273 49 286 L59 284 C56 271 56 259 57 247 Z"/>` },
-  { n: 6, name: "Superior 1", slot: 10, badge: [168, 134],
+  { n: 6, name: "btn.top1", slot: 10, badge: [168, 134],
     shape: `<rect x="117" y="122" width="24" height="24" rx="4"/>` },
-  { n: 7, name: "Superior 2", slot: 11, badge: [168, 166],
+  { n: 7, name: "btn.top2", slot: 11, badge: [168, 166],
     shape: `<rect x="117" y="154" width="24" height="24" rx="4"/>` },
-  { n: 8, name: "Superior 3", slot: 9, badge: [168, 198],
+  { n: 8, name: "btn.top3", slot: 9, badge: [168, 198],
     shape: `<rect x="117" y="186" width="24" height="24" rx="4"/>` },
 ];
 
@@ -157,7 +160,7 @@ export function mouseSvg(strip: StripLook, wheel: string | null): SVGSVGElement 
 
   <g class="hotspots">
     ${PHYSICAL_BUTTONS.map((b) => `
-      <g class="hot" data-n="${b.n}" tabindex="0" role="button" aria-label="${b.n} ${b.name}">
+      <g class="hot" data-n="${b.n}" tabindex="0" role="button" aria-label="${b.n}">
         ${b.shape}
         ${b.n === 3 ? `<g class="tread" pointer-events="none">${wheelTread()}</g>` : ""}
         <g class="badge" transform="translate(${b.badge[0]} ${b.badge[1]})">

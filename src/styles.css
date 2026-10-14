@@ -324,3 +324,20 @@ button.danger:hover:not(:disabled) { border-color: var(--err); color: var(--err)
   .applybar .actions { width: 100%; }
   .applybar .actions button { flex: 1; }
 }
+
+/* horário do perfil */
+.schedule { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+.schedule .field.check { flex: none; }
+.time {
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px;
+  padding: 4px 6px; color: var(--text); color-scheme: dark;
+}
+.time:disabled { opacity: 0.4; }
+.days { display: inline-flex; gap: 4px; }
+.day {
+  width: 28px; height: 28px; padding: 0; border-radius: 50%;
+  font-size: 12px; font-weight: 600; color: var(--muted);
+}
+.day.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.day:disabled { opacity: 0.35; }
+.day.on:disabled { background: var(--surface-2); border-color: var(--border); color: var(--muted); }

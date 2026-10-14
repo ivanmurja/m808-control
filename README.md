@@ -1,82 +1,111 @@
 # M808 Control
 
-Configurador **open source** para o mouse **Redragon Storm Pro (M808-KS)** — uma alternativa leve
-ao software oficial, com recursos que ele não oferece. Feito com [Tauri](https://tauri.app) (Rust + web).
+**Open source configurator for the Redragon Storm Pro (M808-KS) mouse** — a lightweight replacement
+for the official Windows-only software, with features it doesn't have.
+Built with [Tauri](https://tauri.app) (Rust + web).
 
-> Projeto independente, sem relação com a Redragon. O protocolo foi obtido por engenharia reversa
-> para fins de interoperabilidade — veja [docs/PROTOCOL.md](docs/PROTOCOL.md).
+🇧🇷 [Leia em português](README.pt-BR.md)
 
-## Instalação (Windows)
+![DPI tab](docs/screenshots/dpi.jpg)
 
-Baixe o instalador `.exe` (ou `.msi`) na página de [Releases](../../releases) e execute.
+> Independent project, not affiliated with Redragon. The HID protocol was reverse engineered for
+> interoperability — see [docs/PROTOCOL.md](docs/PROTOCOL.md).
 
-O instalador não é assinado digitalmente, então o SmartScreen pode mostrar um aviso:
-clique em **Mais informações → Executar assim mesmo**.
+## Install (Windows)
 
-Feche o software oficial da Redragon antes de usar — os dois disputam a mesma conexão com o mouse.
+Download the `*-setup.exe` from the [latest release](../../releases/latest) and run it.
 
-## Recursos
+The installer is not code-signed yet, so SmartScreen may warn you: click **More info → Run anyway**.
+Close the official Redragon software first — both fight over the same connection to the mouse.
 
-- **DPI**: até 8 níveis (100–16000, passo 100), quantos entram no ciclo, nível ativo e cor de cada um
-- **Botões**: vista de cima do mouse com os 8 botões clicáveis — cliques, voltar/avançar, DPI +/−/ciclo,
-  troca de polling rate, liga/desliga luzes, reset de fábrica ou desativado
-- **Faixa RGB lateral**: onda arco-íris, **onda colorida**, respiração, fixo ou desligado;
-  velocidade e brilho em 10 níveis
-- **Faixa sincronizada com o DPI**: ao trocar o nível no mouse, a faixa assume a cor dele
-- **Luz da roda** (indicador de DPI): fixa, respiração ou desligada
-- **Polling rate**: 125 / 250 / 500 / 1000 Hz
-- **Backup e restauração** da memória do mouse (backup automático antes de gravar a função de reset)
-- **Bandeja do sistema**: troca rápida de DPI; inicia com o Windows já minimizado (opcional)
-- Leve: fechar a janela destrói o WebView; na bandeja fica só o processo Rust
-- Grava **só os bytes que mudaram** e confere relendo a memória
+From version 1.1 on, the app updates itself.
 
-> As configurações ficam gravadas **no próprio mouse** — ele funciona igual com o app fechado.
-> O app na bandeja só é necessário para a sincronização da faixa com o DPI e para a troca rápida.
+## Features
 
-### O que este app faz e o oficial não
+| | |
+|---|---|
+| ![Buttons](docs/screenshots/botoes.jpg) | ![Profiles](docs/screenshots/perfis.jpg) |
 
-| | Oficial | M808 Control |
+- **DPI**: up to 8 levels (100–16000, step 100), how many are in the cycle, active level and color of each
+- **Buttons**: top view of the mouse with its 8 buttons — clicks, back/forward, DPI +/−/cycle,
+  polling switch, lights on/off, factory reset or disabled
+- **Side RGB strip**: rainbow wave, **color wave**, breathing, steady or off, with speed and
+  brightness from 1 to 100% — **beyond the official app limits**
+- **Strip follows the DPI color**: change the level on the mouse and the strip takes its color
+- **Wheel light** (DPI indicator): steady, breathing or off
+- **Profiles** with automatic switching by **running program**, **time of day** or **low battery**;
+  export and import profiles to share them
+- **Battery level** in the window and in the tray, with a low-battery warning
+- **Tray icon** showing the current DPI (in the level color) or the battery
+- **On-screen notice** when the DPI, polling rate or profile changes
+- **Polling rate** 125 / 250 / 500 / 1000 Hz
+- **Backup and restore** of the mouse memory (automatic backup before writing the factory-reset button)
+- **Starts with Windows**, minimized to the tray; lightweight — closing the window destroys the WebView
+- **Portuguese and English**, responsive layout, auto-update
+
+> Settings are stored **on the mouse itself** — it works the same with the app closed.
+> The app only needs to run for automatic profiles, strip/DPI sync and the tray icon.
+
+![Tray icons](docs/screenshots/icones-bandeja.png)
+
+### What it does that the official app doesn't
+
+| | Official | M808 Control |
 |---|:---:|:---:|
-| Onda numa cor só na faixa lateral | — | ✅ |
-| Faixa acompanhando a cor do nível de DPI | — | ✅ |
-| Backup/restauração da memória do mouse | — | ✅ |
-| Troca de DPI pela bandeja | — | ✅ |
-| Código aberto / versão Linux (planejada) | — | ✅ |
-| Macros e combinações de teclas | ✅ | 🚧 |
+| Single-color wave on the side strip | — | ✅ |
+| Speed/brightness beyond the 10 official steps | — | ✅ |
+| Strip following the DPI level color | — | ✅ |
+| Profiles by program, schedule or battery | — | ✅ |
+| Battery / DPI in the tray icon | — | ✅ |
+| Mouse memory backup/restore | — | ✅ |
+| Open source, English UI, Linux (planned) | — | ✅ |
+| Macros and key combinations | ✅ | 🚧 |
 
-## Plataformas
+## Platforms
 
-| Sistema | Situação |
-|---------|----------|
-| Windows 10/11 | ✅ testado (receptor 2.4 GHz) |
-| Linux | 🚧 planejado — o código já usa hidapi/hidraw; falta regra udev e testes |
+| OS | Status |
+|----|--------|
+| Windows 10/11 | ✅ tested (2.4 GHz receiver) |
+| Linux | 🚧 planned — the code already uses hidapi/hidraw; needs a udev rule and testing |
 
-## Compilar
+## Building
 
-Pré-requisitos: [Rust](https://rustup.rs), Node.js 20+ e, no Windows, Microsoft C++ Build Tools.
+Requirements: [Rust](https://rustup.rs), Node.js 20+ and, on Windows, the Microsoft C++ Build Tools.
 
 ```bash
 npm install
-npm run tauri dev      # modo desenvolvimento
-npm run tauri build    # instaladores em src-tauri/target/release/bundle
-cd src-tauri && cargo test --lib   # testes do protocolo
+npm run tauri dev      # development
+cd src-tauri && cargo test --lib   # protocol, profiles and tray icon tests
 ```
 
-Releases: crie uma tag `vX.Y.Z` e o GitHub Actions gera os instaladores num rascunho de release.
+`npm run tauri build` also produces the auto-update files, which must be signed: set
+`TAURI_SIGNING_PRIVATE_KEY` (and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`) to your own key
+(`npx tauri signer generate`), or set `"createUpdaterArtifacts": false` in `src-tauri/tauri.conf.json`
+for a local build.
 
-## Estrutura
+Releases: push a `vX.Y.Z` tag and GitHub Actions builds, signs and drafts the release.
+
+## Project layout
 
 ```
-src/                 interface (TypeScript + Vite, sem framework)
-  mouse.ts           ilustração do Storm Pro com os botões clicáveis
+src/                 UI (TypeScript + Vite, no framework)
+  i18n.ts            translations (pt, en)
+  mouse.ts           Storm Pro illustration with clickable buttons
 src-tauri/src/
-  protocol.rs        protocolo puro: pacotes, checksums, mapa da EEPROM (com testes)
-  device.rs          transporte HID (hidapi)
-  lib.rs             comandos, bandeja, inicialização automática e eventos do mouse
-tools/m808.py        script Python de leitura/escrita usado na engenharia reversa
-docs/PROTOCOL.md     documentação do protocolo
+  protocol.rs        pure protocol: packets, checksums, EEPROM map (with tests)
+  device.rs          HID transport (hidapi)
+  profiles.rs        profiles and automatic switching rules
+  trayicon.rs        tray icon drawn at runtime (DPI / battery)
+  lib.rs             commands, tray, autostart, background workers
+tools/m808.py        Python read/write script used during reverse engineering
+docs/PROTOCOL.md     protocol documentation
 ```
 
-## Licença
+## Contributing
+
+Issues and pull requests are welcome — especially captures of other Redragon models built on the same
+protocol. New UI languages: copy the `en` block in `src/i18n.ts` and the strings in `src-tauri/src/i18n.rs`.
+
+## License
 
 [MIT](LICENSE)
