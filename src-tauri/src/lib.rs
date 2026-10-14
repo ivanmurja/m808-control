@@ -1,4 +1,8 @@
 mod device;
+mod foreground;
+mod osd;
+mod profiles;
+mod trayicon;
 pub mod protocol;
 
 use std::path::{Path, PathBuf};
@@ -7,13 +11,16 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use hidapi::HidApi;
 use serde::{Deserialize, Serialize};
-use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem};
+use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::image::Image;
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder, Wry};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 
 use device::{Device, DeviceError};
-use protocol::{button_kind, Config, CONFIG_LEN};
+use profiles::Profile;
+use protocol::{button_kind, Config, DeviceEvent, CONFIG_LEN};
+use trayicon::TrayIconMode;
 
 /// Região salva em backups: configuração + combos (macros ficam de fora por enquanto).
 const BACKUP_LEN: usize = 0x300;
@@ -26,13 +33,37 @@ const TRAY_ID: &str = "main";
 
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 const RECONNECT_INTERVAL: Duration = Duration::from_secs(5);
+const BATTERY_INTERVAL: Duration = Duration::from_secs(60);
+const FOREGROUND_INTERVAL: Duration = Duration::from_secs(1);
+/// Abaixo disso (em %) avisa uma vez que a bateria está fraca.
+const LOW_BATTERY: u8 = 20;
 
 /// Preferências do app (não ficam no mouse), salvas em `settings.json`.
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 struct Settings {
     /// A faixa lateral assume a cor do nível de DPI ativo sempre que ele muda.
     sync_strip_to_dpi: bool,
+    /// Mostra um aviso rápido na tela ao trocar DPI, polling ou perfil.
+    show_osd: bool,
+    /// Troca de perfil conforme o programa em primeiro plano.
+    auto_switch: bool,
+    /// Perfil usado quando nenhum programa da lista está em primeiro plano.
+    default_profile: Option<String>,
+    /// O que o ícone da bandeja mostra.
+    tray_icon: TrayIconMode,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Settings {
+            sync_strip_to_dpi: false,
+            show_osd: true,
+            auto_switch: false,
+            default_profile: None,
+            tray_icon: TrayIconMode::Dpi,
+        }
+    }
 }
 
 struct Inner {
@@ -41,6 +72,11 @@ struct Inner {
     /// Última imagem lida/gravada de 0..CONFIG_LEN, base para gravar só o que mudou.
     image: Option<Vec<u8>>,
     settings: Settings,
+    profiles: Vec<Profile>,
+    /// Perfil aplicado por último (pelo usuário ou pela troca automática).
+    active_profile: Option<String>,
+    battery: Option<u8>,
+    low_battery_warned: bool,
 }
 
 struct AppState(Mutex<Inner>);
@@ -54,6 +90,12 @@ struct DeviceInfo {
 #[derive(Clone, Serialize)]
 struct LevelChanged {
     dpi_level: u8,
+}
+
+#[derive(Serialize)]
+struct ProfilesView {
+    profiles: Vec<Profile>,
+    active: Option<String>,
 }
 
 type CmdResult<T> = Result<T, String>;
@@ -121,6 +163,21 @@ impl Inner {
         self.image = Some(new);
         Ok(written)
     }
+
+    fn profile_name(&self, id: &str) -> Option<String> {
+        self.profiles.iter().find(|p| p.id == id).map(|p| p.name.clone())
+    }
+}
+
+fn config_path(app: &AppHandle, file: &str) -> Option<PathBuf> {
+    app.path().app_config_dir().ok().map(|d| d.join(file))
+}
+
+fn osd(app: &AppHandle, text: &str) {
+    let enabled = app.state::<AppState>().0.lock().unwrap().settings.show_osd;
+    if enabled {
+        osd::show(app, text);
+    }
 }
 
 // ---------------------------------------------------------------- comandos da interface
@@ -174,32 +231,6 @@ fn save_backup(state: State<AppState>, path: String) -> CmdResult<()> {
     write_backup(&mut state.0.lock().unwrap(), Path::new(&path))
 }
 
-fn settings_path(app: &AppHandle) -> Option<PathBuf> {
-    app.path().app_config_dir().ok().map(|d| d.join("settings.json"))
-}
-
-fn load_settings(app: &AppHandle) -> Settings {
-    settings_path(app)
-        .and_then(|p| std::fs::read(p).ok())
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or_default()
-}
-
-#[tauri::command]
-fn get_settings(state: State<AppState>) -> Settings {
-    state.0.lock().unwrap().settings.clone()
-}
-
-#[tauri::command]
-fn set_settings(app: AppHandle, state: State<AppState>, settings: Settings) -> CmdResult<()> {
-    if let Some(p) = settings_path(&app) {
-        let _ = std::fs::create_dir_all(p.parent().unwrap());
-        std::fs::write(p, serde_json::to_vec_pretty(&settings).unwrap()).map_err(|e| e.to_string())?;
-    }
-    state.0.lock().unwrap().settings = settings;
-    Ok(())
-}
-
 #[tauri::command]
 fn restore_backup(app: AppHandle, state: State<AppState>, path: String) -> CmdResult<Config> {
     let file = std::fs::read(&path).map_err(|e| e.to_string())?;
@@ -222,6 +253,34 @@ fn restore_backup(app: AppHandle, state: State<AppState>, path: String) -> CmdRe
     Ok(Config::from_eeprom(img))
 }
 
+fn load_settings(app: &AppHandle) -> Settings {
+    config_path(app, "settings.json")
+        .and_then(|p| std::fs::read(p).ok())
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+
+fn store_settings(app: &AppHandle, settings: &Settings) -> CmdResult<()> {
+    if let Some(p) = config_path(app, "settings.json") {
+        let _ = std::fs::create_dir_all(p.parent().unwrap());
+        std::fs::write(p, serde_json::to_vec_pretty(settings).unwrap()).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn get_settings(state: State<AppState>) -> Settings {
+    state.0.lock().unwrap().settings.clone()
+}
+
+#[tauri::command]
+fn set_settings(app: AppHandle, state: State<AppState>, settings: Settings) -> CmdResult<()> {
+    store_settings(&app, &settings)?;
+    state.0.lock().unwrap().settings = settings;
+    refresh_tray(&app);
+    Ok(())
+}
+
 #[tauri::command]
 fn get_autostart(app: AppHandle) -> CmdResult<bool> {
     app.autolaunch().is_enabled().map_err(|e| e.to_string())
@@ -233,6 +292,64 @@ fn set_autostart(app: AppHandle, enabled: bool) -> CmdResult<()> {
     if enabled { al.enable() } else { al.disable() }.map_err(|e| e.to_string())?;
     refresh_tray(&app);
     Ok(())
+}
+
+#[tauri::command]
+fn get_battery(state: State<AppState>) -> Option<u8> {
+    state.0.lock().unwrap().battery
+}
+
+#[tauri::command]
+fn get_profiles(state: State<AppState>) -> ProfilesView {
+    let s = state.0.lock().unwrap();
+    ProfilesView { profiles: s.profiles.clone(), active: s.active_profile.clone() }
+}
+
+/// Substitui a lista de perfis (a interface edita a lista inteira).
+#[tauri::command]
+fn save_profiles(app: AppHandle, state: State<AppState>, profiles: Vec<Profile>) -> CmdResult<()> {
+    if let Some(p) = config_path(&app, "profiles.json") {
+        profiles::save(&p, &profiles).map_err(|e| e.to_string())?;
+    }
+    {
+        let mut s = state.0.lock().unwrap();
+        s.profiles = profiles;
+        // Referências a perfis apagados deixam de valer.
+        let exists = |id: &Option<String>, ps: &[Profile]| id.as_ref().is_some_and(|i| ps.iter().any(|p| &p.id == i));
+        if !exists(&s.active_profile, &s.profiles) {
+            s.active_profile = None;
+        }
+        if !exists(&s.settings.default_profile, &s.profiles) && s.settings.default_profile.is_some() {
+            s.settings.default_profile = None;
+            let settings = s.settings.clone();
+            drop(s);
+            store_settings(&app, &settings)?;
+        }
+    }
+    refresh_tray(&app);
+    Ok(())
+}
+
+#[tauri::command]
+fn apply_profile(app: AppHandle, id: String) -> CmdResult<Config> {
+    activate_profile(&app, &id)
+}
+
+/// Grava o perfil no mouse e avisa a interface, a bandeja e a tela.
+fn activate_profile(app: &AppHandle, id: &str) -> CmdResult<Config> {
+    let state = app.state::<AppState>();
+    let (cfg, name) = {
+        let mut s = state.0.lock().unwrap();
+        let p = s.profiles.iter().find(|p| p.id == id).cloned().ok_or("perfil não encontrado")?;
+        let cfg = s.synced(p.config);
+        s.write_config(&cfg)?;
+        s.active_profile = Some(p.id);
+        (cfg, p.name)
+    };
+    let _ = app.emit("config-changed", &cfg);
+    osd(app, &format!("Perfil: {name}"));
+    refresh_tray(app);
+    Ok(cfg)
 }
 
 // ---------------------------------------------------------------- janela e bandeja
@@ -247,9 +364,14 @@ fn show_main_window(app: &AppHandle) {
     }
     let _ = WebviewWindowBuilder::new(app, MAIN_WINDOW, WebviewUrl::App("index.html".into()))
         .title("M808 Control")
-        .inner_size(980.0, 700.0)
-        .min_inner_size(760.0, 560.0)
+        .inner_size(1000.0, 720.0)
+        .min_inner_size(560.0, 480.0)
         .build();
+}
+
+fn level_text(cfg: &Config, level: u8) -> String {
+    let dpi = cfg.levels.get(level as usize).map_or(0, |l| l.dpi);
+    format!("Nível {} · {dpi} DPI", level + 1)
 }
 
 fn set_active_level(app: &AppHandle, level: u8) {
@@ -260,21 +382,32 @@ fn set_active_level(app: &AppHandle, level: u8) {
             Ok(mut cfg) if level < cfg.level_count => {
                 cfg.active_level = level;
                 let cfg = s.synced(cfg);
-                s.write_config(&cfg).map(|_| ())
+                s.write_config(&cfg).map(|_| Some(cfg))
             }
-            Ok(_) => Ok(()),
+            Ok(_) => Ok(None),
             Err(e) => Err(e),
         }
     };
-    if result.is_ok() {
+    if let Ok(Some(cfg)) = result {
         let _ = app.emit("device-event", LevelChanged { dpi_level: level });
+        osd(app, &level_text(&cfg, level));
     }
     refresh_tray(app);
 }
 
 fn build_tray_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let state = app.state::<AppState>();
-    let cfg = state.0.lock().unwrap().config();
+    let (cfg, battery, profiles, active, auto_switch) = {
+        let s = state.0.lock().unwrap();
+        let connected = s.dev.is_some();
+        (
+            s.config().filter(|_| connected),
+            s.battery.filter(|_| connected),
+            s.profiles.clone(),
+            s.active_profile.clone(),
+            s.settings.auto_switch,
+        )
+    };
     let autostart = app.autolaunch().is_enabled().unwrap_or(false);
 
     let mut items: Vec<Box<dyn IsMenuItem<Wry>>> = vec![
@@ -283,6 +416,9 @@ fn build_tray_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     ];
     match &cfg {
         Some(c) => {
+            if let Some(b) = battery {
+                items.push(Box::new(MenuItem::with_id(app, "noop", format!("Bateria: {b}%"), false, None::<&str>)?));
+            }
             for (i, l) in c.levels.iter().take(c.level_count as usize).enumerate() {
                 let label = format!("Nível {} · {} DPI", i + 1, l.dpi);
                 let checked = i == c.active_level as usize;
@@ -291,6 +427,19 @@ fn build_tray_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         }
         None => items.push(Box::new(MenuItem::with_id(app, "noop", "Mouse não conectado", false, None::<&str>)?)),
     }
+
+    if !profiles.is_empty() {
+        let sub = Submenu::with_id(app, "profiles", "Perfis", true)?;
+        for p in &profiles {
+            let checked = active.as_deref() == Some(p.id.as_str());
+            sub.append(&CheckMenuItem::with_id(app, format!("profile:{}", p.id), &p.name, cfg.is_some(), checked, None::<&str>)?)?;
+        }
+        sub.append(&PredefinedMenuItem::separator(app)?)?;
+        sub.append(&CheckMenuItem::with_id(app, "auto_switch", "Trocar pelo programa em uso", true, auto_switch, None::<&str>)?)?;
+        items.push(Box::new(PredefinedMenuItem::separator(app)?));
+        items.push(Box::new(sub));
+    }
+
     items.push(Box::new(PredefinedMenuItem::separator(app)?));
     items.push(Box::new(CheckMenuItem::with_id(app, "autostart", "Iniciar com o sistema", true, autostart, None::<&str>)?));
     items.push(Box::new(MenuItem::with_id(app, "quit", "Sair", true, None::<&str>)?));
@@ -305,18 +454,58 @@ fn tray_tooltip(app: &AppHandle) -> String {
     match s.config() {
         Some(c) if s.dev.is_some() => {
             let dpi = c.levels.get(c.active_level as usize).map_or(0, |l| l.dpi);
-            format!("M808 Control — {dpi} DPI")
+            let mut t = format!("M808 Control — {dpi} DPI");
+            if let Some(b) = s.battery {
+                t += &format!(" · bateria {b}%");
+            }
+            if let Some(name) = s.active_profile.as_deref().and_then(|id| s.profile_name(id)) {
+                t += &format!("\nPerfil: {name}");
+            }
+            t
         }
         _ => "M808 Control — mouse desconectado".into(),
     }
 }
 
+/// Ícone dinâmico: (chave para evitar redesenho, pixels RGBA 32×32). `None` = logo do app.
+fn tray_icon_pixels(app: &AppHandle) -> Option<(String, Vec<u8>)> {
+    let state = app.state::<AppState>();
+    let s = state.0.lock().unwrap();
+    s.dev.as_ref()?; // desconectado: logo
+    match s.settings.tray_icon {
+        TrayIconMode::Logo => None,
+        TrayIconMode::Dpi => {
+            let c = s.config()?;
+            let level = c.levels.get(c.active_level as usize)?;
+            let key = format!("dpi:{}:{:?}", level.dpi, level.color);
+            Some((key, trayicon::dpi_icon(level.dpi, level.color)))
+        }
+        TrayIconMode::Battery => {
+            let b = s.battery?;
+            Some((format!("bat:{b}"), trayicon::battery_icon(b)))
+        }
+    }
+}
+
 fn refresh_tray(app: &AppHandle) {
+    static LAST_ICON: Mutex<Option<String>> = Mutex::new(None);
     let Some(tray) = app.tray_by_id(TRAY_ID) else { return };
     if let Ok(menu) = build_tray_menu(app) {
         let _ = tray.set_menu(Some(menu));
     }
     let _ = tray.set_tooltip(Some(tray_tooltip(app)));
+
+    let icon = tray_icon_pixels(app);
+    let key = icon.as_ref().map_or_else(|| "logo".to_string(), |(k, _)| k.clone());
+    let mut last = LAST_ICON.lock().unwrap();
+    if last.as_deref() != Some(key.as_str()) {
+        let image = match icon {
+            Some((_, px)) => Some(Image::new_owned(px, trayicon::SIZE, trayicon::SIZE)),
+            None => app.default_window_icon().cloned(),
+        };
+        let _ = tray.set_icon(image);
+        *last = Some(key);
+    }
 }
 
 fn on_tray_menu(app: &AppHandle, id: &str) {
@@ -328,9 +517,22 @@ fn on_tray_menu(app: &AppHandle, id: &str) {
             let _ = if al.is_enabled().unwrap_or(false) { al.disable() } else { al.enable() };
             refresh_tray(app);
         }
+        "auto_switch" => {
+            let settings = {
+                let state = app.state::<AppState>();
+                let mut s = state.0.lock().unwrap();
+                s.settings.auto_switch = !s.settings.auto_switch;
+                s.settings.clone()
+            };
+            let _ = store_settings(app, &settings);
+            let _ = app.emit("settings-changed", &settings);
+            refresh_tray(app);
+        }
         _ => {
             if let Some(level) = id.strip_prefix("level:").and_then(|n| n.parse().ok()) {
                 set_active_level(app, level);
+            } else if let Some(pid) = id.strip_prefix("profile:") {
+                let _ = activate_profile(app, pid);
             }
         }
     }
@@ -371,10 +573,11 @@ fn enable_autostart_on_first_run(app: &AppHandle) {
 
 // ---------------------------------------------------------------- segundo plano
 
-/// Lê eventos do mouse (ex.: troca de DPI pelo botão) e reconecta quando ele aparece.
-fn spawn_background(app: AppHandle) {
+/// Lê eventos do mouse (ex.: troca de DPI pelo botão), a bateria, e reconecta quando ele aparece.
+fn spawn_device_worker(app: AppHandle) {
     std::thread::spawn(move || {
         let mut last_attempt: Option<Instant> = None;
+        let mut last_battery: Option<Instant> = None;
         loop {
             std::thread::sleep(POLL_INTERVAL);
             let state = app.state::<AppState>();
@@ -388,6 +591,7 @@ fn spawn_background(app: AppHandle) {
                 let ok = s.load_config().is_ok();
                 drop(s);
                 if ok {
+                    last_battery = None;
                     let _ = app.emit("device-connected", ());
                 }
                 refresh_tray(&app);
@@ -404,33 +608,103 @@ fn spawn_background(app: AppHandle) {
                     continue;
                 }
             };
-            // O próprio mouse já gravou a mudança: só atualiza a cópia local.
-            let mut changed = false;
-            let mut level_changed = false;
-            for e in &events {
-                let Some(img) = s.image.as_mut() else { break };
-                if let Some(level) = e.dpi_level {
-                    img[protocol::addr::ACTIVE_LEVEL..][..2].copy_from_slice(&protocol::pair(level));
-                    changed = true;
-                    level_changed = true;
-                }
-                if let Some(hz) = e.polling_hz {
-                    img[protocol::addr::POLLING..][..2].copy_from_slice(&protocol::pair(protocol::polling_code(hz)));
-                    changed = true;
-                }
-            }
-            if level_changed && s.settings.sync_strip_to_dpi {
-                if let Some(cfg) = s.config() {
-                    let cfg = s.synced(cfg);
-                    let _ = s.write_config(&cfg);
+
+            let mut battery_changed = false;
+            let mut low_battery = None;
+            if last_battery.is_none_or(|t| t.elapsed() >= BATTERY_INTERVAL) {
+                last_battery = Some(Instant::now());
+                if let Ok(level) = s.dev.as_mut().unwrap().battery() {
+                    battery_changed = level != s.battery;
+                    s.battery = level;
+                    match level {
+                        Some(b) if b <= LOW_BATTERY && !s.low_battery_warned => {
+                            s.low_battery_warned = true;
+                            low_battery = Some(b);
+                        }
+                        Some(b) if b > LOW_BATTERY + 10 => s.low_battery_warned = false,
+                        _ => {}
+                    }
                 }
             }
+
+            let (changed, messages) = absorb_events(&mut s, &events);
+            let battery = s.battery;
             drop(s);
+
             for e in events {
                 let _ = app.emit("device-event", e);
             }
-            if changed {
+            for m in messages {
+                osd(&app, &m);
+            }
+            if battery_changed {
+                let _ = app.emit("battery", battery);
+            }
+            if let Some(b) = low_battery {
+                osd(&app, &format!("Bateria fraca: {b}%"));
+            }
+            if changed || battery_changed {
                 refresh_tray(&app);
+            }
+        }
+    });
+}
+
+/// Atualiza a cópia local com o que o próprio mouse já gravou e devolve os avisos a mostrar.
+fn absorb_events(s: &mut Inner, events: &[DeviceEvent]) -> (bool, Vec<String>) {
+    let mut changed = false;
+    let mut level_changed = false;
+    let mut messages = Vec::new();
+    for e in events {
+        let Some(img) = s.image.as_mut() else { break };
+        if let Some(level) = e.dpi_level {
+            img[protocol::addr::ACTIVE_LEVEL..][..2].copy_from_slice(&protocol::pair(level));
+            changed = true;
+            level_changed = true;
+        }
+        if let Some(hz) = e.polling_hz {
+            img[protocol::addr::POLLING..][..2].copy_from_slice(&protocol::pair(protocol::polling_code(hz)));
+            changed = true;
+            messages.push(format!("Polling {hz} Hz"));
+        }
+    }
+    if level_changed {
+        if let Some(cfg) = s.config() {
+            messages.insert(0, level_text(&cfg, cfg.active_level));
+            if s.settings.sync_strip_to_dpi {
+                let cfg = s.synced(cfg);
+                let _ = s.write_config(&cfg);
+            }
+        }
+    }
+    (changed, messages)
+}
+
+/// Troca de perfil conforme o programa em primeiro plano (só quando ele muda).
+fn spawn_foreground_watcher(app: AppHandle) {
+    let own = std::env::current_exe().ok().and_then(|p| foreground::exe_name(&p.to_string_lossy()));
+    std::thread::spawn(move || {
+        let mut last_exe: Option<String> = None;
+        loop {
+            std::thread::sleep(FOREGROUND_INTERVAL);
+            let Some(exe) = foreground::foreground_exe() else { continue };
+            // Mexer no próprio app (ex.: editando perfis) não deve trocar o perfil.
+            if Some(&exe) == own.as_ref() || Some(&exe) == last_exe.as_ref() {
+                continue;
+            }
+            last_exe = Some(exe.clone());
+            let target = {
+                let state = app.state::<AppState>();
+                let s = state.0.lock().unwrap();
+                if !s.settings.auto_switch || s.dev.is_none() {
+                    continue;
+                }
+                profiles::pick(&s.profiles, &exe, s.settings.default_profile.as_deref())
+                    .map(|p| p.id.clone())
+                    .filter(|id| s.active_profile.as_ref() != Some(id))
+            };
+            if let Some(id) = target {
+                let _ = activate_profile(&app, &id);
             }
         }
     });
@@ -448,13 +722,28 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main_window(app)))
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec![ARG_MINIMIZED])))
         .plugin(tauri_plugin_dialog::init())
-        .manage(AppState(Mutex::new(Inner { api, dev: None, image: None, settings: Settings::default() })))
+        .manage(AppState(Mutex::new(Inner {
+            api,
+            dev: None,
+            image: None,
+            settings: Settings::default(),
+            profiles: Vec::new(),
+            active_profile: None,
+            battery: None,
+            low_battery_warned: false,
+        })))
         .setup(move |app| {
             let handle = app.handle().clone();
-            app.state::<AppState>().0.lock().unwrap().settings = load_settings(&handle);
+            {
+                let state = app.state::<AppState>();
+                let mut s = state.0.lock().unwrap();
+                s.settings = load_settings(&handle);
+                s.profiles = config_path(&handle, "profiles.json").map(|p| profiles::load(&p)).unwrap_or_default();
+            }
             enable_autostart_on_first_run(&handle);
             create_tray(&handle)?;
-            spawn_background(handle.clone());
+            spawn_device_worker(handle.clone());
+            spawn_foreground_watcher(handle.clone());
             if !start_minimized {
                 show_main_window(&handle);
             }
@@ -469,7 +758,11 @@ pub fn run() {
             get_autostart,
             set_autostart,
             get_settings,
-            set_settings
+            set_settings,
+            get_battery,
+            get_profiles,
+            save_profiles,
+            apply_profile
         ])
         .build(tauri::generate_context!())
         .expect("erro ao iniciar o app");

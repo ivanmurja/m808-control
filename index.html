@@ -17,6 +17,7 @@
         </div>
       </div>
       <div class="status">
+        <span id="battery" class="battery" hidden title="Bateria do mouse"><i></i><b></b></span>
         <span id="status-dot" class="dot"></span>
         <span id="status-text">Procurando mouse…</span>
         <button id="btn-reconnect" class="ghost">Reconectar</button>
@@ -28,6 +29,7 @@
         <button role="tab" data-tab="dpi" class="active">DPI</button>
         <button role="tab" data-tab="buttons">Botões</button>
         <button role="tab" data-tab="lighting">Iluminação</button>
+        <button role="tab" data-tab="profiles">Perfis</button>
         <button role="tab" data-tab="system">Sistema</button>
       </nav>
 
@@ -61,6 +63,31 @@
           </div>
         </section>
 
+        <section id="tab-profiles" class="panel">
+          <div class="panel-head">
+            <h2>Perfis</h2>
+            <button id="btn-new-profile" class="primary">Novo perfil</button>
+          </div>
+          <p class="hint">Um perfil guarda toda a configuração do mouse (DPI, botões, luzes, polling). O novo perfil é criado a partir da configuração atual do mouse.</p>
+          <div class="rows">
+            <div class="row">
+              <span class="label">
+                Trocar de perfil pelo programa em uso
+                <small>Ao abrir um programa da lista de um perfil, ele é aplicado. Precisa do app aberto ou na bandeja.</small>
+              </span>
+              <label class="switch"><input type="checkbox" id="auto-switch" /><span></span></label>
+            </div>
+            <div class="row">
+              <span class="label">
+                Perfil padrão
+                <small>Usado quando nenhum programa das listas está em primeiro plano</small>
+              </span>
+              <select id="default-profile"></select>
+            </div>
+          </div>
+          <div id="profile-list" class="profiles"></div>
+        </section>
+
         <section id="tab-system" class="panel">
           <div class="panel-head"><h2>Sistema</h2></div>
           <div class="rows">
@@ -79,6 +106,24 @@
                 <small>Abre minimizado na bandeja, ao lado do relógio</small>
               </span>
               <label class="switch"><input type="checkbox" id="autostart" /><span></span></label>
+            </div>
+            <div class="row">
+              <span class="label">
+                Ícone da bandeja
+                <small>O que aparece no ícone ao lado do relógio</small>
+              </span>
+              <select id="tray-icon">
+                <option value="dpi">DPI atual (na cor do nível)</option>
+                <option value="battery">Bateria</option>
+                <option value="logo">Logo do app</option>
+              </select>
+            </div>
+            <div class="row">
+              <span class="label">
+                Aviso na tela
+                <small>Mostra "2000 DPI", "Perfil: Jogo" etc. ao trocar pelo mouse ou pela bandeja</small>
+              </span>
+              <label class="switch"><input type="checkbox" id="show-osd" /><span></span></label>
             </div>
             <div class="row">
               <span class="label">Backup da memória do mouse</span>

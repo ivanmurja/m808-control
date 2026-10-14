@@ -233,3 +233,94 @@ main { flex: 1; overflow-y: auto; padding: 22px 26px 30px; }
 .mouse-svg .hot > rect.wheel { fill: #1a1c1f; stroke: #000; }
 .mouse-svg .hot:hover > rect.wheel, .mouse-svg .hot.selected > rect.wheel { fill: #2a1416; stroke: var(--accent); }
 .mouse-svg .tread path { fill: none; stroke: #4a4e54; stroke-width: 1.6; stroke-linecap: round; }
+
+/* bateria no topo */
+.battery { display: inline-flex; align-items: center; gap: 6px; margin-right: 6px; color: var(--muted); font-size: 12.5px; }
+.battery i {
+  position: relative; width: 22px; height: 11px; border: 1.5px solid var(--muted); border-radius: 3px;
+  --level: 100%;
+}
+.battery i::before {
+  content: ""; position: absolute; left: 1px; top: 1px; bottom: 1px;
+  width: calc((100% - 2px) * var(--level) / 100%); max-width: calc(100% - 2px);
+  background: var(--ok); border-radius: 1px;
+}
+.battery i::after { content: ""; position: absolute; right: -4px; top: 2.5px; width: 2px; height: 4px; background: var(--muted); border-radius: 0 1px 1px 0; }
+.battery.low { color: var(--err); }
+.battery.low i::before { background: var(--err); }
+
+/* perfis */
+.profiles { display: flex; flex-direction: column; gap: 12px; margin-top: 16px; }
+.card.profile.active { border-color: var(--accent); }
+.profile-head { display: flex; align-items: center; gap: 10px; }
+.profile-head .mono { margin-left: auto; }
+.profile-name {
+  background: transparent; border: 1px solid transparent; border-radius: 6px;
+  padding: 4px 6px; font-size: 15px; font-weight: 600; color: var(--text); min-width: 0; flex: 0 1 220px;
+}
+.profile-name:hover, .profile-name:focus { border-color: var(--border); background: var(--surface-2); }
+.tag { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 99px; background: var(--accent); color: #fff; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; min-height: 4px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 4px; padding: 3px 4px 3px 10px; border-radius: 99px;
+  background: var(--surface-2); border: 1px solid var(--border); font-size: 12.5px;
+}
+.chip-x { border: none; background: transparent; padding: 0 6px; color: var(--muted); font-size: 15px; line-height: 1; }
+.chip-x:hover { color: var(--err); }
+.app-input { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 5px 8px; width: 170px; }
+button.small { padding: 5px 11px; font-size: 13px; }
+button.danger:hover:not(:disabled) { border-color: var(--err); color: var(--err); }
+.pct { min-width: 38px; text-align: right; }
+
+/* ================= layout responsivo ================= */
+.panel { max-width: 1120px; }
+.row { flex-wrap: wrap; }
+.row .label { flex: 1 1 220px; }
+.row select { max-width: 100%; }
+.buttons-layout { grid-template-columns: clamp(220px, 28vw, 340px) 1fr; }
+.profiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); }
+.profile-head { flex-wrap: wrap; }
+.applybar { flex-wrap: wrap; gap: 10px; }
+
+/* janela média: vista do mouse acima da lista */
+@media (max-width: 900px) {
+  .buttons-layout { grid-template-columns: 1fr; }
+  .mouse-view { position: static; width: min(260px, 70%); margin: 0 auto; }
+  .profiles { grid-template-columns: 1fr; }
+}
+
+/* janela estreita: abas no topo, linhas de DPI em duas linhas */
+@media (max-width: 760px) {
+  .layout { flex-direction: column; }
+  .tabs {
+    width: auto; flex-direction: row; overflow-x: auto; padding: 6px 10px; gap: 2px;
+    border-right: none; border-bottom: 1px solid var(--border); flex: none;
+  }
+  .tabs button { white-space: nowrap; padding: 8px 12px; }
+  .tabs button.active { box-shadow: inset 0 -3px 0 var(--accent); }
+  .topbar { padding: 10px 14px; }
+  .brand .sub { display: none; }
+  main { padding: 16px 14px 24px; }
+  .level {
+    grid-template-columns: 22px 18px 40px 1fr 30px;
+    grid-template-areas: "radio idx color num unit" "slider slider slider slider slider";
+    row-gap: 8px;
+  }
+  .level > input[type="radio"] { grid-area: radio; }
+  .level > .idx { grid-area: idx; }
+  .level > input[type="color"] { grid-area: color; }
+  .level > input[type="range"] { grid-area: slider; }
+  .level > .dpi-num { grid-area: num; justify-self: end; }
+  .level > .unit { grid-area: unit; }
+  .row select { min-width: 0; flex: 1 1 200px; }
+  .cards { grid-template-columns: 1fr; }
+  .field { flex-wrap: wrap; }
+}
+
+@media (max-width: 480px) {
+  .status #status-text { display: none; }
+  .brand h1 { font-size: 15px; }
+  .applybar { padding: 10px 14px; }
+  .applybar .actions { width: 100%; }
+  .applybar .actions button { flex: 1; }
+}

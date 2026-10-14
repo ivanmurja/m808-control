@@ -144,6 +144,12 @@ impl Device {
         Ok(())
     }
 
+    /// Nível da bateria em % (0..=100, passos de 10).
+    pub fn battery(&mut self) -> Result<Option<u8>> {
+        let r = self.send(p::CMD_STATUS, &[])?;
+        Ok(p::battery_percent(&r))
+    }
+
     /// Lê eventos espontâneos sem bloquear.
     pub fn poll_events(&mut self) -> Result<Vec<DeviceEvent>> {
         self.drain()?;

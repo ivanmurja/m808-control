@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <title>M808 Control</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+      body {
+        display: grid; place-items: center;
+        font-family: "Segoe UI", system-ui, sans-serif;
+        user-select: none; cursor: default;
+      }
+      .pill {
+        display: flex; align-items: center; gap: 10px;
+        padding: 10px 20px; border-radius: 14px;
+        background: rgba(20, 21, 24, 0.92);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        color: #f1f2f4; font-size: 17px; font-weight: 600; letter-spacing: 0.2px;
+        animation: pop 0.18s ease-out;
+      }
+      .pill::before {
+        content: ""; width: 9px; height: 9px; border-radius: 50%;
+        background: #e5383b; box-shadow: 0 0 10px #e5383b;
+      }
+      @keyframes pop { from { transform: translateY(8px); opacity: 0; } to { transform: none; opacity: 1; } }
+    </style>
+    <script type="module" src="/src/osd.ts"></script>
+  </head>
+  <body><div class="pill" id="text"></div></body>
+</html>

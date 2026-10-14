@@ -21,6 +21,8 @@ pub const REPORT_NOTIFY: u8 = 0x09;
 pub const PACKET_LEN: usize = 17;
 
 pub const CMD_HANDSHAKE: u8 = 0x01;
+/// Status do mouse; `resp[6]` = bateria 0..=10.
+pub const CMD_STATUS: u8 = 0x04;
 pub const CMD_WRITE_EEPROM: u8 = 0x07;
 pub const CMD_READ_EEPROM: u8 = 0x08;
 pub const EVT_DEVICE: u8 = 0x0A;
@@ -51,12 +53,6 @@ pub const BUTTON_SLOTS: usize = 16;
 
 /// Velocidade dos efeitos da luz da roda e do logo, níveis 1..=10 → byte gravado.
 pub const LED_SPEED: [u8; 10] = [0x01, 0x1E, 0x3C, 0x5A, 0x80, 0x96, 0xB4, 0xD2, 0xE6, 0xFF];
-/// Faixa lateral, ondas (modos 0 e 3): nível 1 (lento) .. 10 (rápido). Menor = mais rápido.
-pub const STRIP_SPEED_WAVE: [u8; 10] = [0x2D, 0x28, 0x23, 0x1E, 0x19, 0x13, 0x0F, 0x0A, 0x05, 0x03];
-/// Faixa lateral, respiração (modo 1): nível 1 (lento) .. 10 (rápido).
-pub const STRIP_SPEED_BREATH: [u8; 10] = [0xFF, 0xE6, 0xD2, 0xBE, 0xAA, 0x96, 0x82, 0x6E, 0x46, 0x28];
-/// Faixa lateral, brilho: nível 1..10.
-pub const STRIP_BRIGHTNESS: [u8; 10] = [0x19, 0x32, 0x4B, 0x64, 0x7D, 0x96, 0xAF, 0xC8, 0xE1, 0xFF];
 
 /// Modos da faixa RGB lateral (byte 0 de `0xA0`).
 pub mod strip_mode {
@@ -210,12 +206,10 @@ fn raw_for(level: u8, current: u8, table: &[u8; 10]) -> u8 {
     }
 }
 
-fn strip_speed_table(mode: u8) -> &'static [u8; 10] {
-    if mode == strip_mode::BREATH {
-        &STRIP_SPEED_BREATH
-    } else {
-        &STRIP_SPEED_WAVE
-    }
+/// Bateria em % a partir da resposta do comando de status (0x04).
+pub fn battery_percent(resp: &[u8]) -> Option<u8> {
+    let level = *resp.get(6)?;
+    (level <= 10).then_some(level * 10)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -243,14 +237,15 @@ pub struct LogoLed {
 }
 
 /// Faixa RGB lateral (`0xA0`).
+///
+/// Velocidade e brilho são os bytes crus: o firmware aceita qualquer valor 1..=255, além
+/// das 10 opções do app oficial (testado no hardware). Velocidade: menor = mais rápido.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StripLed {
     /// Ver [`strip_mode`].
     pub mode: u8,
     pub color: [u8; 3],
-    /// 1 (lento) ..= 10 (rápido)
     pub speed: u8,
-    /// 1..=10
     pub brightness: u8,
 }
 
@@ -323,8 +318,8 @@ impl Config {
             strip: StripLed {
                 mode: img[s],
                 color: [img[s + 1], img[s + 2], img[s + 3]],
-                speed: level_of(img[s + 4], strip_speed_table(img[s])),
-                brightness: level_of(img[s + 5], &STRIP_BRIGHTNESS),
+                speed: img[s + 4],
+                brightness: img[s + 5],
             },
             buttons,
         }
@@ -363,8 +358,7 @@ impl Config {
         put(ll, &v);
 
         let s = &self.strip;
-        let speed = raw_for(s.speed, old[addr::STRIP + 4], strip_speed_table(s.mode));
-        let bri = raw_for(s.brightness, old[addr::STRIP + 5], &STRIP_BRIGHTNESS);
+        let (speed, bri) = (s.speed.max(1), s.brightness.max(1));
         put(addr::STRIP, &entry([s.mode, s.color[0], s.color[1], s.color[2], speed, bri]));
 
         for (i, b) in self.buttons.iter().take(BUTTON_SLOTS).enumerate() {
@@ -478,7 +472,8 @@ mod tests {
         assert_eq!(c.logo_led.color, [0xFF, 0x00, 0xFF]);
         assert_eq!(c.strip.mode, strip_mode::OFF);
         assert_eq!(c.strip.color, [0xFF, 0xFF, 0x00]);
-        assert_eq!(c.strip.brightness, 10);
+        assert_eq!(c.strip.brightness, 0xFF);
+        assert_eq!(c.strip.speed, 0x13);
         assert_eq!(c.buttons[0], Button { kind: 1, code: 1, param: 0 });
         assert_eq!(c.buttons[9].kind, button_kind::POLLING_SWITCH);
     }
@@ -509,10 +504,18 @@ mod tests {
         // Gravado no hardware e confirmado visualmente: 00 00 40 ff 0f ff 08 = onda arco-íris
         let mut img = dump();
         let mut c = Config::from_eeprom(&img);
-        c.strip = StripLed { mode: strip_mode::RAINBOW_WAVE, color: [0, 0x40, 0xFF], speed: 7, brightness: 10 };
+        c.strip = StripLed { mode: strip_mode::RAINBOW_WAVE, color: [0, 0x40, 0xFF], speed: 0x0F, brightness: 0xFF };
         c.apply_to(&mut img);
         assert_eq!(&img[0xA0..0xA7], &[0x00, 0x00, 0x40, 0xFF, 0x0F, 0xFF, 0x08]);
         assert_eq!(&img[0xA7..0xAB], &[0x00, 0x55, 0x01, 0x54], "bytes desconhecidos preservados");
+    }
+
+    #[test]
+    fn battery_from_status() {
+        // Resposta real do comando 0x04: bateria 9/10
+        let r = [0x09, 0x04, 0, 0, 0, 0x02, 0x09, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x3D];
+        assert_eq!(battery_percent(&r), Some(90));
+        assert_eq!(battery_percent(&[0; 4]), None);
     }
 
     #[test]
